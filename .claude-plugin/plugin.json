@@ -1,0 +1,15 @@
+{
+  "name": "cache-timer",
+  "version": "1.0.0",
+  "description": "Live cache TTL countdown in the status line — know when your 5-minute prompt cache expires",
+  "author": {
+    "name": "Matt Morrell"
+  },
+  "keywords": [
+    "cache",
+    "ttl",
+    "cost",
+    "status-line",
+    "hooks"
+  ]
+}
