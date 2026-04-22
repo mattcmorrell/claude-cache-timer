@@ -1,0 +1,1 @@
+curl -fsSL https://raw.githubusercontent.com/mattcmorrell/claude-cache-timer/main/install-remote.sh | bash
