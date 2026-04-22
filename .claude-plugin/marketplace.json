@@ -1,0 +1,17 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "mattcmorrell-cache-timer",
+  "description": "Claude Code cache TTL status indicator",
+  "owner": {
+    "name": "Matt Morrell"
+  },
+  "plugins": [
+    {
+      "name": "cache-timer",
+      "description": "Live prompt cache TTL in the status line — see when the 5-minute cache expires and what a rebuild costs",
+      "category": "productivity",
+      "source": "./",
+      "homepage": "https://github.com/mattcmorrell/claude-cache-timer"
+    }
+  ]
+}

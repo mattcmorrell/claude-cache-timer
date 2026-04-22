@@ -19,7 +19,23 @@ The timer pauses during active Claude operations (tool use, compacting, multi-tu
 
 ## Install
 
-Requires `jq` (`brew install jq` on macOS).
+### Step 1: Add the plugin
+
+From inside Claude Code:
+
+```
+/plugin marketplace add mattcmorrell/claude-cache-timer
+/plugin install cache-timer
+```
+
+This gives you:
+- **Stop hook** — records a timestamp each time Claude finishes responding
+- **UserPromptSubmit hook** — marks session as active + warns if cache expired before sending
+- **`/cache` skill** — on-demand cache status check
+
+### Step 2: Enable the status line (optional but recommended)
+
+The status line shows cache state persistently at the bottom of your terminal. Plugins can't configure this automatically, so run the installer:
 
 ```bash
 git clone https://github.com/mattcmorrell/claude-cache-timer.git
@@ -27,16 +43,9 @@ cd claude-cache-timer
 bash install.sh
 ```
 
+Requires `jq` (`brew install jq` on macOS).
+
 Then restart Claude Code.
-
-## What it installs
-
-- **Status line**: Prepends cache state to your existing status line (preserves `ccstatusline` or whatever you had)
-- **Stop hook**: Records a timestamp each time Claude finishes responding
-- **UserPromptSubmit hook**: Marks session as active when you send a message, and warns if cache has expired
-- **`/cache` skill**: On-demand cache status check
-
-The installer backs up your `settings.json` before making changes.
 
 ## Uninstall
 
@@ -44,6 +53,8 @@ The installer backs up your `settings.json` before making changes.
 cd claude-cache-timer
 bash uninstall.sh
 ```
+
+And from Claude Code: `/plugin uninstall cache-timer`
 
 ## How it works
 
