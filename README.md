@@ -22,9 +22,7 @@ The timer pauses during active Claude operations (tool use, compacting, multi-tu
 Requires `jq` (`brew install jq` on macOS).
 
 ```bash
-git clone https://github.com/mattcmorrell/claude-cache-timer.git
-cd claude-cache-timer
-bash install.sh
+curl -fsSL https://raw.githubusercontent.com/mattcmorrell/claude-cache-timer/main/install-remote.sh | bash
 ```
 
 Restart Claude Code. You'll see the cache indicator in your status line immediately.
