@@ -19,15 +19,8 @@ if command -v jq >/dev/null 2>&1; then
   [ -z "$CACHED_TOKENS" ] && CACHED_TOKENS=0
 fi
 
-# Check if timer is enabled for this session (or globally)
-ENABLED=false
-if [ -f "$CACHE_DIR/always" ]; then
-  ENABLED=true
-elif [ -n "$SESSION_ID" ] && [ -f "$CACHE_DIR/${SESSION_ID}.timer-on" ]; then
-  ENABLED=true
-fi
-
-if [ "$ENABLED" = false ]; then
+# On by default — check if explicitly disabled for this session
+if [ -n "$SESSION_ID" ] && [ -f "$CACHE_DIR/${SESSION_ID}.timer-off" ]; then
   # Pass through to existing ccstatusline only
   if command -v ccstatusline >/dev/null 2>&1; then
     echo "$INPUT" | ccstatusline 2>/dev/null
@@ -112,7 +105,7 @@ elif [ -n "$TIMESTAMP_FILE" ]; then
           if [ -n "$COST" ] && [ "$COST" != "0" ]; then
             STALE_COST=" ~\$${COST} rebuild ·"
           fi
-          CACHE_DISPLAY="${DANGER}☢ ${HOURS}h stale ·${STALE_COST} /compact or new session${RESET}"
+          CACHE_DISPLAY="${DANGER}☣ ${HOURS}h stale ·${STALE_COST} /clear or new session${RESET}"
         else
           CACHE_DISPLAY="${DIM}○ ${HOURS}h stale · /compact or new session${RESET}"
         fi
@@ -134,7 +127,7 @@ elif [ -n "$TIMESTAMP_FILE" ]; then
         fi
 
         if [ "$CACHED_TOKENS" -gt "$DANGER_TOKEN_THRESHOLD" ] 2>/dev/null && [ -n "$COST_NOTE" ]; then
-          CACHE_DISPLAY="${DANGER}☢ expired ${AGO_STR}${COST_NOTE}${RESET}"
+          CACHE_DISPLAY="${DANGER}☣ expired ${AGO_STR}${COST_NOTE}${RESET}"
         elif [ -n "$COST_NOTE" ]; then
           CACHE_DISPLAY="${WARN}○ expired ${AGO_STR}${COST_NOTE}${RESET}"
         else

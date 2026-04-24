@@ -31,8 +31,8 @@ jq '
 
 # Remove slash commands
 rm -rf "$HOME/.claude/skills/usage-report"
-rm -rf "$HOME/.claude/skills/timer"
-echo "cache-timer: Removed /usage-report and /timer commands"
+rm -rf "$HOME/.claude/skills/cache-timer"
+echo "cache-timer: Removed /usage-report and /cache-timer commands"
 
 echo "cache-timer: Uninstalled. Restart Claude Code to apply."
 echo "cache-timer: Backup at ${SETTINGS_FILE}.bak"
