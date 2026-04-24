@@ -20,7 +20,7 @@ import os
 import sys
 import argparse
 from pathlib import Path
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from collections import defaultdict
 
 # ── Pricing ($/MTok, April 2026) ────────────────────────────────────────────
@@ -1226,8 +1226,8 @@ def generate_html(report):
 
 # ── Team HTML report ─────────────────────────────────────────────────────────
 
-def generate_team_html(team, report):
-    """Generate a team-friendly HTML insights report."""
+def _build_range_content(team, report):
+    """Build HTML content for one date range (summary + cards)."""
     t = team
     r = report
     p = r["period"]
@@ -1453,12 +1453,65 @@ def generate_team_html(team, report):
     {nc_items_html}
   </div>"""
 
+    return f"""
+    <div class="range-summary">
+      <div class="period">{start_str} &ndash; {end_str}</div>
+      <div class="summary-line">${o["total_spend"]:.0f} total &middot; {o["session_count"]} sessions &middot; ${o["daily_avg"]:.0f}/day avg</div>
+    </div>
+
+    <div class="card miss">
+      <div class="card-label">Cache Miss Tax</div>
+      {miss_card}
+    </div>
+
+    <div class="card gaps">
+      <div class="card-label">Idle Gap Penalty</div>
+      {gap_card}
+    </div>
+
+    <div class="card size">
+      <div class="card-label">Session Size Impact</div>
+      {size_card}
+    </div>
+
+    <div class="card rec">
+      <div class="card-label">Recommendation</div>
+      {rec_card}
+    </div>
+
+    {nc_card_html}"""
+
+
+def generate_team_html(preset_data, default_range="30d"):
+    """Generate a team-friendly HTML report with date range tabs."""
+    range_order = ["7d", "14d", "30d", "90d", "all"]
+
+    if default_range not in preset_data:
+        default_range = next((k for k in range_order if k in preset_data), "all")
+
+    tabs_html = ""
+    for key in range_order:
+        if key not in preset_data:
+            continue
+        _, _, label = preset_data[key]
+        active = " active" if key == default_range else ""
+        tabs_html += f'    <button class="range-btn{active}" data-range="{key}">{label}</button>\n'
+
+    panels_html = ""
+    for key in range_order:
+        if key not in preset_data:
+            continue
+        team, report, label = preset_data[key]
+        active = " active" if key == default_range else ""
+        content = _build_range_content(team, report)
+        panels_html += f'\n  <div class="range-panel{active}" data-range="{key}">{content}\n  </div>\n'
+
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Claude Usage Report &mdash; {start_str} &ndash; {end_str}</title>
+<title>Claude Usage Report</title>
 <style>
   *, *::before, *::after {{ box-sizing: border-box; }}
   body {{
@@ -1471,13 +1524,33 @@ def generate_team_html(team, report):
     max-width: 700px; margin: 0 auto;
     padding: 48px 24px 80px;
   }}
-  header {{
+  .top-title {{
+    text-align: center; font-size: 28px; font-weight: 700;
+    color: #f0f6fc; margin: 0 0 24px;
+  }}
+
+  /* Range tabs */
+  .range-tabs {{
+    display: flex; gap: 8px; justify-content: center;
+    margin-bottom: 32px; flex-wrap: wrap;
+  }}
+  .range-btn {{
+    background: #21262d; border: 1px solid #30363d;
+    color: #8b949e; border-radius: 20px;
+    padding: 8px 18px; font-size: 14px;
+    cursor: pointer; transition: all 0.2s;
+    font-family: inherit;
+  }}
+  .range-btn:hover {{ color: #e6edf3; border-color: #58a6ff; }}
+  .range-btn.active {{
+    background: #58a6ff; border-color: #58a6ff;
+    color: #0d1117; font-weight: 600;
+  }}
+  .range-panel {{ display: none; }}
+  .range-panel.active {{ display: block; }}
+  .range-summary {{
     text-align: center; margin-bottom: 48px;
     padding-bottom: 32px; border-bottom: 1px solid #21262d;
-  }}
-  header h1 {{
-    font-size: 28px; font-weight: 700; color: #f0f6fc;
-    margin: 0 0 8px;
   }}
   .period {{ font-size: 16px; color: #8b949e; margin-bottom: 4px; }}
   .summary-line {{ font-size: 14px; color: #656d76; }}
@@ -1685,49 +1758,30 @@ def generate_team_html(team, report):
 </head>
 <body>
 <div class="container">
-  <header>
-    <h1>Your Claude Usage Report</h1>
-    <div class="period">{start_str} &ndash; {end_str}</div>
-    <div class="summary-line">${o["total_spend"]:.0f} total &middot; {o["session_count"]} sessions &middot; ${o["daily_avg"]:.0f}/day avg</div>
-  </header>
+  <h1 class="top-title">Your Claude Usage Report</h1>
 
-  <div class="card miss">
-    <div class="card-label">Cache Miss Tax</div>
-    {miss_card}
-  </div>
+  <nav class="range-tabs">
+{tabs_html}  </nav>
 
-  <div class="card gaps">
-    <div class="card-label">Idle Gap Penalty</div>
-    {gap_card}
-  </div>
-
-  <div class="card size">
-    <div class="card-label">Session Size Impact</div>
-    {size_card}
-  </div>
-
-  <div class="card rec">
-    <div class="card-label">Recommendation</div>
-    {rec_card}
-  </div>
-
-  {nc_card_html}
+{panels_html}
 
   <details>
     <summary>How does this work?</summary>
     <div class="explainer">
-      <p><strong>Prompt caching:</strong> Claude Code caches your conversation context so it doesn&rsquo;t
-      need to re-process it every turn. This cache has a time-to-live (TTL) &mdash; 5 minutes by default,
-      or 1 hour if you enable extended caching.</p>
-      <p><strong>Cache miss:</strong> When the cache expires (you were idle too long), Claude has to
-      rebuild the entire cache from scratch. This is expensive &mdash; writing tokens to cache costs
-      12.5&times; more than reading from it.</p>
-      <p><strong>Why big sessions cost more:</strong> Every turn reads your full conversation context.
-      A session at 200K tokens reads 200K tokens per turn. At $0.50/MTok, that&rsquo;s $0.10 just
-      in cache reads &mdash; before any output.</p>
-      <p><strong>The 5-minute rule:</strong> If you&rsquo;re in a big session and need a break, either
-      switch to 1-hour TTL so the cache survives longer breaks, or run <code>/clear</code> before
-      stepping away so you don&rsquo;t pay to reload a huge context.</p>
+      <p><strong>Prompt caching:</strong> Claude Code saves your conversation in a cache so it doesn&rsquo;t
+      have to re-read everything on every turn. By default, this cache expires after <strong>5 minutes</strong>
+      of inactivity. You can extend it to <strong>1 hour</strong> by adding
+      <code>"CLAUDE_CODE_USE_EXTENDED_CACHE_TTL": "true"</code> to your Claude Code settings.</p>
+      <p><strong>Cache expiry:</strong> When the cache expires (you were idle too long), Claude has to
+      rebuild it from scratch. This is expensive &mdash; writing to cache costs
+      12.5&times; more than reading from it. This is the main source of &ldquo;wasted&rdquo; spend.</p>
+      <p><strong>Why big sessions cost more:</strong> Every turn reads your full conversation.
+      A session at 200K tokens reads all 200K per turn. At $0.50/MTok, that&rsquo;s $0.10 just
+      in reads &mdash; before Claude even responds.</p>
+      <p><strong>The 5-minute rule:</strong> If you&rsquo;re in a long session and need a break, either
+      extend the cache timeout to 1 hour (see above), or type <code>/compact</code> before
+      stepping away to shrink the session. If you&rsquo;ll be gone a while, <code>/clear</code>
+      starts fresh &mdash; cheaper than Claude reloading a huge conversation.</p>
     </div>
   </details>
 
@@ -1737,6 +1791,16 @@ def generate_team_html(team, report):
 </div>
 
 <script>
+document.querySelectorAll('.range-btn').forEach(function(btn) {{
+  btn.addEventListener('click', function() {{
+    var range = this.getAttribute('data-range');
+    document.querySelectorAll('.range-btn').forEach(function(b) {{ b.classList.remove('active'); }});
+    document.querySelectorAll('.range-panel').forEach(function(p) {{ p.classList.remove('active'); }});
+    this.classList.add('active');
+    document.querySelector('.range-panel[data-range="' + range + '"]').classList.add('active');
+  }});
+}});
+
 function copyCmd(btn) {{
   var code = btn.parentElement.querySelector('code');
   var text = code.textContent || code.innerText;
@@ -1748,6 +1812,7 @@ function copyCmd(btn) {{
 </script>
 </body>
 </html>"""
+
 
 
 # ── JSON output ──────────────────────────────────────────────────────────────
@@ -1792,7 +1857,7 @@ def main():
     print(f"Scanning {len(files)} files...", file=sys.stderr)
 
     since_date = None
-    if args.since:
+    if args.since and not args.team:
         since_date = datetime.fromisoformat(args.since).replace(tzinfo=None)
 
     sessions = []
@@ -1826,8 +1891,28 @@ def main():
     if args.json:
         print(json.dumps(serialize_report(report), indent=2, default=str))
     elif args.team:
-        team = compute_team_insights(sessions, costs_list)
-        print(generate_team_html(team, report))
+        now = datetime.now()
+        presets_spec = [
+            ("7d", "Last 7 days", 7),
+            ("14d", "Last 14 days", 14),
+            ("30d", "Last 30 days", 30),
+            ("90d", "Last 90 days", 90),
+            ("all", "All time", None),
+        ]
+        preset_data = {}
+        for key, label, days_ago in presets_spec:
+            if days_ago is not None:
+                cutoff = (now - timedelta(days=days_ago)).replace(tzinfo=None)
+                pairs = [(s, c) for s, c in zip(sessions, costs_list)
+                        if s["first_ts"] and s["first_ts"].replace(tzinfo=None) >= cutoff]
+            else:
+                pairs = list(zip(sessions, costs_list))
+            if pairs:
+                f_sessions, f_costs = zip(*pairs)
+                r = run_analysis(list(f_sessions), list(f_costs))
+                t = compute_team_insights(list(f_sessions), list(f_costs))
+                preset_data[key] = (t, r, label)
+        print(generate_team_html(preset_data))
     elif args.html:
         print(generate_html(report))
     else:

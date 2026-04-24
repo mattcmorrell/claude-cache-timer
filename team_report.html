@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Claude Usage Report &mdash; Mar 25 &ndash; Apr 24, 2026</title>
+<title>Claude Usage Report</title>
 <style>
   *, *::before, *::after { box-sizing: border-box; }
   body {
@@ -16,13 +16,33 @@
     max-width: 700px; margin: 0 auto;
     padding: 48px 24px 80px;
   }
-  header {
+  .top-title {
+    text-align: center; font-size: 28px; font-weight: 700;
+    color: #f0f6fc; margin: 0 0 24px;
+  }
+
+  /* Range tabs */
+  .range-tabs {
+    display: flex; gap: 8px; justify-content: center;
+    margin-bottom: 32px; flex-wrap: wrap;
+  }
+  .range-btn {
+    background: #21262d; border: 1px solid #30363d;
+    color: #8b949e; border-radius: 20px;
+    padding: 8px 18px; font-size: 14px;
+    cursor: pointer; transition: all 0.2s;
+    font-family: inherit;
+  }
+  .range-btn:hover { color: #e6edf3; border-color: #58a6ff; }
+  .range-btn.active {
+    background: #58a6ff; border-color: #58a6ff;
+    color: #0d1117; font-weight: 600;
+  }
+  .range-panel { display: none; }
+  .range-panel.active { display: block; }
+  .range-summary {
     text-align: center; margin-bottom: 48px;
     padding-bottom: 32px; border-bottom: 1px solid #21262d;
-  }
-  header h1 {
-    font-size: 28px; font-weight: 700; color: #f0f6fc;
-    margin: 0 0 8px;
   }
   .period { font-size: 16px; color: #8b949e; margin-bottom: 4px; }
   .summary-line { font-size: 14px; color: #656d76; }
@@ -230,15 +250,277 @@
 </head>
 <body>
 <div class="container">
-  <header>
-    <h1>Your Claude Usage Report</h1>
-    <div class="period">Mar 25 &ndash; Apr 24, 2026</div>
-    <div class="summary-line">$1410 total &middot; 432 sessions &middot; $45/day avg</div>
-  </header>
+  <h1 class="top-title">Your Claude Usage Report</h1>
 
-  <div class="card miss">
-    <div class="card-label">Cache Miss Tax</div>
+  <nav class="range-tabs">
+    <button class="range-btn" data-range="7d">Last 7 days</button>
+    <button class="range-btn" data-range="14d">Last 14 days</button>
+    <button class="range-btn active" data-range="30d">Last 30 days</button>
+    <button class="range-btn" data-range="90d">Last 90 days</button>
+    <button class="range-btn" data-range="all">All time</button>
+  </nav>
+
+
+  <div class="range-panel" data-range="7d">
+    <div class="range-summary">
+      <div class="period">Apr 17 &ndash; Apr 24, 2026</div>
+      <div class="summary-line">$426 total &middot; 311 sessions &middot; $53/day avg</div>
+    </div>
+
+    <div class="card miss">
+      <div class="card-label">Cache Miss Tax</div>
+      
+        <div class="hero-pair">
+          <div class="hero-item">
+            <div class="hero-num">2%</div>
+            <div class="hero-desc">of your turns</div>
+          </div>
+          <div class="hero-arrow">&rarr;</div>
+          <div class="hero-item">
+            <div class="hero-num accent-red">6%</div>
+            <div class="hero-desc">of your spend</div>
+          </div>
+        </div>
+        <div class="bar-compare">
+          <div class="bar-row">
+            <span class="bar-label">Turns</span>
+            <div class="bar-track"><div class="bar-fill neutral" style="width:2.5%"></div></div>
+            <span class="bar-pct">2%</span>
+          </div>
+          <div class="bar-row">
+            <span class="bar-label">Cost</span>
+            <div class="bar-track"><div class="bar-fill hot" style="width:6.2%"></div></div>
+            <span class="bar-pct">6%</span>
+          </div>
+        </div>
+        <div class="miss-stats">
+          200 misses &middot; $26 total &middot;
+          <strong>3&times;</strong> normal turn cost
+        </div>
+        <p class="card-text">
+          When you step away for 5+ minutes during a session, the prompt cache expires.
+          Coming back means rebuilding it from scratch &mdash; and the bigger the session,
+          the more expensive the reload.
+        </p>
+    </div>
+
+    <div class="card gaps">
+      <div class="card-label">Idle Gap Penalty</div>
+      
+        <div class="hero-single">
+          <span class="hero-num">3</span>
+          <span class="hero-desc">idle breaks cost you <strong>$1</strong></span>
+        </div>
+        <div class="gap-buckets">
+            <div class="gap-bucket">
+              <div class="gap-count">3</div>
+              <div class="gap-detail">
+                <div class="gap-range">breaks between 5&ndash;60 min &mdash; $1</div>
+                <div class="gap-fix gap-fix-warn">1-hour TTL would prevent these, but its 60% write premium on <em>every</em> cache write costs more than the savings. Best fix: <code>/compact</code> before stepping away, or start a new session when you return.</div>
+              </div>
+            </div></div>
+    </div>
+
+    <div class="card size">
+      <div class="card-label">Session Size Impact</div>
+      
+        <div class="hero-single">
+          <span class="hero-num">8.1&times;</span>
+          <span class="hero-desc">more expensive per turn in your largest sessions</span>
+        </div>
+    <div class="size-bars">
+        <div class="size-row">
+          <span class="size-label">&lt; 100K</span>
+          <div class="size-track"><div class="size-fill" style="width:12%"></div></div>
+          <span class="size-value">$0.03/turn</span>
+          <span class="size-count">276 sessions</span>
+        </div>
+        <div class="size-row">
+          <span class="size-label">100&ndash;200K</span>
+          <div class="size-track"><div class="size-fill" style="width:40%"></div></div>
+          <span class="size-value">$0.11/turn</span>
+          <span class="size-count">34 sessions</span>
+        </div>
+        <div class="size-row">
+          <span class="size-label">&gt; 200K</span>
+          <div class="size-track"><div class="size-fill" style="width:100%"></div></div>
+          <span class="size-value">$0.28/turn</span>
+          <span class="size-count">1 session</span>
+        </div></div>
+    <p class="card-text">
+      Every turn re-reads your full conversation context. Bigger context = higher per-turn cost.
+      Use <code>/clear</code> at natural breakpoints to keep sessions lean.
+    </p>
+    </div>
+
+    <div class="card rec">
+      <div class="card-label">Recommendation</div>
+      
+        <div class="good">
+          <div class="good-icon">&check;</div>
+          <div class="good-text">
+            Your settings match your usage patterns. No changes needed &mdash; keep doing what you&rsquo;re doing.
+          </div>
+        </div>
+    </div>
+
     
+  <div class="card calm">
+    <div class="card-label">What&rsquo;s Not Inflating Your Costs</div>
+    
+        <div class="nc-item">
+          <div class="nc-header">
+            <span class="nc-title">MCP servers &amp; tool calls</span>
+            <span class="nc-stat">~3% of spend</span>
+          </div>
+          <div class="nc-detail">
+            5 configured MCP servers
+            with 150 tool calls across 15 sessions.
+            Tool definitions add ~3% overhead to your system prompt costs.
+            The rest of your context is the work itself.
+          </div>
+        </div>
+  </div>
+  </div>
+
+  <div class="range-panel" data-range="14d">
+    <div class="range-summary">
+      <div class="period">Apr 13 &ndash; Apr 24, 2026</div>
+      <div class="summary-line">$450 total &middot; 329 sessions &middot; $38/day avg</div>
+    </div>
+
+    <div class="card miss">
+      <div class="card-label">Cache Miss Tax</div>
+      
+        <div class="hero-pair">
+          <div class="hero-item">
+            <div class="hero-num">2%</div>
+            <div class="hero-desc">of your turns</div>
+          </div>
+          <div class="hero-arrow">&rarr;</div>
+          <div class="hero-item">
+            <div class="hero-num accent-red">6%</div>
+            <div class="hero-desc">of your spend</div>
+          </div>
+        </div>
+        <div class="bar-compare">
+          <div class="bar-row">
+            <span class="bar-label">Turns</span>
+            <div class="bar-track"><div class="bar-fill neutral" style="width:2.4%"></div></div>
+            <span class="bar-pct">2%</span>
+          </div>
+          <div class="bar-row">
+            <span class="bar-label">Cost</span>
+            <div class="bar-track"><div class="bar-fill hot" style="width:5.9%"></div></div>
+            <span class="bar-pct">6%</span>
+          </div>
+        </div>
+        <div class="miss-stats">
+          204 misses &middot; $27 total &middot;
+          <strong>3&times;</strong> normal turn cost
+        </div>
+        <p class="card-text">
+          When you step away for 5+ minutes during a session, the prompt cache expires.
+          Coming back means rebuilding it from scratch &mdash; and the bigger the session,
+          the more expensive the reload.
+        </p>
+    </div>
+
+    <div class="card gaps">
+      <div class="card-label">Idle Gap Penalty</div>
+      
+        <div class="hero-single">
+          <span class="hero-num">4</span>
+          <span class="hero-desc">idle breaks cost you <strong>$1</strong></span>
+        </div>
+        <div class="gap-buckets">
+            <div class="gap-bucket">
+              <div class="gap-count">3</div>
+              <div class="gap-detail">
+                <div class="gap-range">breaks between 5&ndash;60 min &mdash; $1</div>
+                <div class="gap-fix gap-fix-warn">1-hour TTL would prevent these, but its 60% write premium on <em>every</em> cache write costs more than the savings. Best fix: <code>/compact</code> before stepping away, or start a new session when you return.</div>
+              </div>
+            </div>
+            <div class="gap-bucket">
+              <div class="gap-count">1</div>
+              <div class="gap-detail">
+                <div class="gap-range">break over 1 hour &mdash; $0</div>
+                <div class="gap-fix">Fix: <code>/clear</code> before stepping away. Fresh start is cheaper than reloading.</div>
+              </div>
+            </div></div>
+    </div>
+
+    <div class="card size">
+      <div class="card-label">Session Size Impact</div>
+      
+        <div class="hero-single">
+          <span class="hero-num">8.1&times;</span>
+          <span class="hero-desc">more expensive per turn in your largest sessions</span>
+        </div>
+    <div class="size-bars">
+        <div class="size-row">
+          <span class="size-label">&lt; 100K</span>
+          <div class="size-track"><div class="size-fill" style="width:12%"></div></div>
+          <span class="size-value">$0.03/turn</span>
+          <span class="size-count">293 sessions</span>
+        </div>
+        <div class="size-row">
+          <span class="size-label">100&ndash;200K</span>
+          <div class="size-track"><div class="size-fill" style="width:40%"></div></div>
+          <span class="size-value">$0.11/turn</span>
+          <span class="size-count">35 sessions</span>
+        </div>
+        <div class="size-row">
+          <span class="size-label">&gt; 200K</span>
+          <div class="size-track"><div class="size-fill" style="width:100%"></div></div>
+          <span class="size-value">$0.28/turn</span>
+          <span class="size-count">1 session</span>
+        </div></div>
+    <p class="card-text">
+      Every turn re-reads your full conversation context. Bigger context = higher per-turn cost.
+      Use <code>/clear</code> at natural breakpoints to keep sessions lean.
+    </p>
+    </div>
+
+    <div class="card rec">
+      <div class="card-label">Recommendation</div>
+      
+        <div class="good">
+          <div class="good-icon">&check;</div>
+          <div class="good-text">
+            Your settings match your usage patterns. No changes needed &mdash; keep doing what you&rsquo;re doing.
+          </div>
+        </div>
+    </div>
+
+    
+  <div class="card calm">
+    <div class="card-label">What&rsquo;s Not Inflating Your Costs</div>
+    
+        <div class="nc-item">
+          <div class="nc-header">
+            <span class="nc-title">MCP servers &amp; tool calls</span>
+            <span class="nc-stat">~3% of spend</span>
+          </div>
+          <div class="nc-detail">
+            5 configured MCP servers
+            with 161 tool calls across 17 sessions.
+            Tool definitions add ~3% overhead to your system prompt costs.
+            The rest of your context is the work itself.
+          </div>
+        </div>
+  </div>
+  </div>
+
+  <div class="range-panel active" data-range="30d">
+    <div class="range-summary">
+      <div class="period">Mar 25 &ndash; Apr 24, 2026</div>
+      <div class="summary-line">$1434 total &middot; 441 sessions &middot; $46/day avg</div>
+    </div>
+
+    <div class="card miss">
+      <div class="card-label">Cache Miss Tax</div>
+      
         <div class="hero-pair">
           <div class="hero-item">
             <div class="hero-num">2%</div>
@@ -253,17 +535,17 @@
         <div class="bar-compare">
           <div class="bar-row">
             <span class="bar-label">Turns</span>
-            <div class="bar-track"><div class="bar-fill neutral" style="width:2.5%"></div></div>
+            <div class="bar-track"><div class="bar-fill neutral" style="width:2.4%"></div></div>
             <span class="bar-pct">2%</span>
           </div>
           <div class="bar-row">
             <span class="bar-label">Cost</span>
-            <div class="bar-track"><div class="bar-fill hot" style="width:15.5%"></div></div>
+            <div class="bar-track"><div class="bar-fill hot" style="width:15.3%"></div></div>
             <span class="bar-pct">15%</span>
           </div>
         </div>
         <div class="miss-stats">
-          454 misses &middot; $218 total &middot;
+          458 misses &middot; $220 total &middot;
           <strong>7&times;</strong> normal turn cost
         </div>
         <p class="card-text">
@@ -271,11 +553,11 @@
           Coming back means rebuilding it from scratch &mdash; and the bigger the session,
           the more expensive the reload.
         </p>
-  </div>
+    </div>
 
-  <div class="card gaps">
-    <div class="card-label">Idle Gap Penalty</div>
-    
+    <div class="card gaps">
+      <div class="card-label">Idle Gap Penalty</div>
+      
         <div class="hero-single">
           <span class="hero-num">58</span>
           <span class="hero-desc">idle breaks cost you <strong>$74</strong></span>
@@ -295,27 +577,27 @@
                 <div class="gap-fix">Fix: <code>/clear</code> before stepping away. Fresh start is cheaper than reloading.</div>
               </div>
             </div></div>
-  </div>
+    </div>
 
-  <div class="card size">
-    <div class="card-label">Session Size Impact</div>
-    
+    <div class="card size">
+      <div class="card-label">Session Size Impact</div>
+      
         <div class="hero-single">
-          <span class="hero-num">4.7&times;</span>
+          <span class="hero-num">4.6&times;</span>
           <span class="hero-desc">more expensive per turn in your largest sessions</span>
         </div>
     <div class="size-bars">
         <div class="size-row">
           <span class="size-label">&lt; 100K</span>
-          <div class="size-track"><div class="size-fill" style="width:21%"></div></div>
+          <div class="size-track"><div class="size-fill" style="width:22%"></div></div>
           <span class="size-value">$0.03/turn</span>
-          <span class="size-count">375 sessions</span>
+          <span class="size-count">383 sessions</span>
         </div>
         <div class="size-row">
           <span class="size-label">100&ndash;200K</span>
           <div class="size-track"><div class="size-fill" style="width:64%"></div></div>
           <span class="size-value">$0.10/turn</span>
-          <span class="size-count">48 sessions</span>
+          <span class="size-count">49 sessions</span>
         </div>
         <div class="size-row">
           <span class="size-label">&gt; 200K</span>
@@ -327,70 +609,366 @@
       Every turn re-reads your full conversation context. Bigger context = higher per-turn cost.
       Use <code>/clear</code> at natural breakpoints to keep sessions lean.
     </p>
-  </div>
+    </div>
 
-  <div class="card rec">
-    <div class="card-label">Recommendation</div>
-    
+    <div class="card rec">
+      <div class="card-label">Recommendation</div>
+      
         <div class="good">
           <div class="good-icon">&check;</div>
           <div class="good-text">
             Your settings match your usage patterns. No changes needed &mdash; keep doing what you&rsquo;re doing.
           </div>
         </div>
+    </div>
+
+    
+  <div class="card calm">
+    <div class="card-label">What&rsquo;s Not Inflating Your Costs</div>
+    
+        <div class="nc-item">
+          <div class="nc-header">
+            <span class="nc-title">MCP servers &amp; tool calls</span>
+            <span class="nc-stat">~3% of spend</span>
+          </div>
+          <div class="nc-detail">
+            6 configured MCP servers
+            with 790 tool calls across 35 sessions.
+            Tool definitions add ~3% overhead to your system prompt costs.
+            The rest of your context is the work itself.
+          </div>
+        </div>
+        <div class="nc-item">
+          <div class="nc-header">
+            <span class="nc-title">Output tokens</span>
+            <span class="nc-stat">~13% of spend</span>
+          </div>
+          <div class="nc-detail">
+            Despite being the most expensive token type at $25/MTok, Claude&rsquo;s responses
+            are a small fraction of your bill. The bulk goes to reading and caching
+            your conversation context.
+          </div>
+        </div>
+  </div>
   </div>
 
+  <div class="range-panel" data-range="90d">
+    <div class="range-summary">
+      <div class="period">Jan 26 &ndash; Apr 24, 2026</div>
+      <div class="summary-line">$1881 total &middot; 982 sessions &middot; $21/day avg</div>
+    </div>
+
+    <div class="card miss">
+      <div class="card-label">Cache Miss Tax</div>
+      
+        <div class="hero-pair">
+          <div class="hero-item">
+            <div class="hero-num">3%</div>
+            <div class="hero-desc">of your turns</div>
+          </div>
+          <div class="hero-arrow">&rarr;</div>
+          <div class="hero-item">
+            <div class="hero-num accent-red">15%</div>
+            <div class="hero-desc">of your spend</div>
+          </div>
+        </div>
+        <div class="bar-compare">
+          <div class="bar-row">
+            <span class="bar-label">Turns</span>
+            <div class="bar-track"><div class="bar-fill neutral" style="width:3.0%"></div></div>
+            <span class="bar-pct">3%</span>
+          </div>
+          <div class="bar-row">
+            <span class="bar-label">Cost</span>
+            <div class="bar-track"><div class="bar-fill hot" style="width:14.9%"></div></div>
+            <span class="bar-pct">15%</span>
+          </div>
+        </div>
+        <div class="miss-stats">
+          810 misses &middot; $280 total &middot;
+          <strong>6&times;</strong> normal turn cost
+        </div>
+        <p class="card-text">
+          When you step away for 5+ minutes during a session, the prompt cache expires.
+          Coming back means rebuilding it from scratch &mdash; and the bigger the session,
+          the more expensive the reload.
+        </p>
+    </div>
+
+    <div class="card gaps">
+      <div class="card-label">Idle Gap Penalty</div>
+      
+        <div class="hero-single">
+          <span class="hero-num">75</span>
+          <span class="hero-desc">idle breaks cost you <strong>$83</strong></span>
+        </div>
+        <div class="gap-buckets">
+            <div class="gap-bucket">
+              <div class="gap-count">46</div>
+              <div class="gap-detail">
+                <div class="gap-range">breaks between 5&ndash;60 min &mdash; $42</div>
+                <div class="gap-fix gap-fix-warn">1-hour TTL would prevent these, but its 60% write premium on <em>every</em> cache write costs more than the savings. Best fix: <code>/compact</code> before stepping away, or start a new session when you return.</div>
+              </div>
+            </div>
+            <div class="gap-bucket">
+              <div class="gap-count">29</div>
+              <div class="gap-detail">
+                <div class="gap-range">breaks over 1 hour &mdash; $42</div>
+                <div class="gap-fix">Fix: <code>/clear</code> before stepping away. Fresh start is cheaper than reloading.</div>
+              </div>
+            </div></div>
+    </div>
+
+    <div class="card size">
+      <div class="card-label">Session Size Impact</div>
+      
+        <div class="hero-single">
+          <span class="hero-num">4.4&times;</span>
+          <span class="hero-desc">more expensive per turn in your largest sessions</span>
+        </div>
+    <div class="size-bars">
+        <div class="size-row">
+          <span class="size-label">&lt; 100K</span>
+          <div class="size-track"><div class="size-fill" style="width:21%"></div></div>
+          <span class="size-value">$0.04/turn</span>
+          <span class="size-count">758 sessions</span>
+        </div>
+        <div class="size-row">
+          <span class="size-label">100&ndash;200K</span>
+          <div class="size-track"><div class="size-fill" style="width:100%"></div></div>
+          <span class="size-value">$0.17/turn</span>
+          <span class="size-count">215 sessions</span>
+        </div>
+        <div class="size-row">
+          <span class="size-label">&gt; 200K</span>
+          <div class="size-track"><div class="size-fill" style="width:94%"></div></div>
+          <span class="size-value">$0.16/turn</span>
+          <span class="size-count">9 sessions</span>
+        </div></div>
+    <p class="card-text">
+      Every turn re-reads your full conversation context. Bigger context = higher per-turn cost.
+      Use <code>/clear</code> at natural breakpoints to keep sessions lean.
+    </p>
+    </div>
+
+    <div class="card rec">
+      <div class="card-label">Recommendation</div>
+      
+        <div class="good">
+          <div class="good-icon">&check;</div>
+          <div class="good-text">
+            Your settings match your usage patterns. No changes needed &mdash; keep doing what you&rsquo;re doing.
+          </div>
+        </div>
+    </div>
+
+    
   <div class="card calm">
-    <div class="card-label">What's Not Inflating Your Costs</div>
-    <div class="nc-item">
-      <div class="nc-header">
-        <span class="nc-title">MCP servers &amp; tool calls</span>
-        <span class="nc-stat">~2% of spend</span>
-      </div>
-      <div class="nc-detail">
-        6 configured MCP servers (Playwright, Figma, etc.) with 784 tool calls across 34 sessions.
-        Tool definitions add ~2% overhead to your system prompt costs. Tool results
-        account for just 6% of context growth &mdash; the other 94% is normal work
-        like reading files and running commands.
-      </div>
-    </div>
-    <div class="nc-item">
-      <div class="nc-header">
-        <span class="nc-title">Output tokens</span>
-        <span class="nc-stat">~6% of spend</span>
-      </div>
-      <div class="nc-detail">
-        Despite being the most expensive token type at $25/MTok, Claude&rsquo;s responses
-        are a small fraction of your bill. The bulk goes to reading and caching
-        your conversation context.
-      </div>
-    </div>
+    <div class="card-label">What&rsquo;s Not Inflating Your Costs</div>
+    
+        <div class="nc-item">
+          <div class="nc-header">
+            <span class="nc-title">MCP servers &amp; tool calls</span>
+            <span class="nc-stat">~3% of spend</span>
+          </div>
+          <div class="nc-detail">
+            6 configured MCP servers
+            with 1243 tool calls across 58 sessions.
+            Tool definitions add ~3% overhead to your system prompt costs.
+            The rest of your context is the work itself.
+          </div>
+        </div>
+        <div class="nc-item">
+          <div class="nc-header">
+            <span class="nc-title">Output tokens</span>
+            <span class="nc-stat">~11% of spend</span>
+          </div>
+          <div class="nc-detail">
+            Despite being the most expensive token type at $25/MTok, Claude&rsquo;s responses
+            are a small fraction of your bill. The bulk goes to reading and caching
+            your conversation context.
+          </div>
+        </div>
   </div>
+  </div>
+
+  <div class="range-panel" data-range="all">
+    <div class="range-summary">
+      <div class="period">Jan 09 &ndash; Apr 24, 2026</div>
+      <div class="summary-line">$1911 total &middot; 1060 sessions &middot; $18/day avg</div>
+    </div>
+
+    <div class="card miss">
+      <div class="card-label">Cache Miss Tax</div>
+      
+        <div class="hero-pair">
+          <div class="hero-item">
+            <div class="hero-num">3%</div>
+            <div class="hero-desc">of your turns</div>
+          </div>
+          <div class="hero-arrow">&rarr;</div>
+          <div class="hero-item">
+            <div class="hero-num accent-red">15%</div>
+            <div class="hero-desc">of your spend</div>
+          </div>
+        </div>
+        <div class="bar-compare">
+          <div class="bar-row">
+            <span class="bar-label">Turns</span>
+            <div class="bar-track"><div class="bar-fill neutral" style="width:3.2%"></div></div>
+            <span class="bar-pct">3%</span>
+          </div>
+          <div class="bar-row">
+            <span class="bar-label">Cost</span>
+            <div class="bar-track"><div class="bar-fill hot" style="width:15.0%"></div></div>
+            <span class="bar-pct">15%</span>
+          </div>
+        </div>
+        <div class="miss-stats">
+          912 misses &middot; $287 total &middot;
+          <strong>5&times;</strong> normal turn cost
+        </div>
+        <p class="card-text">
+          When you step away for 5+ minutes during a session, the prompt cache expires.
+          Coming back means rebuilding it from scratch &mdash; and the bigger the session,
+          the more expensive the reload.
+        </p>
+    </div>
+
+    <div class="card gaps">
+      <div class="card-label">Idle Gap Penalty</div>
+      
+        <div class="hero-single">
+          <span class="hero-num">76</span>
+          <span class="hero-desc">idle breaks cost you <strong>$84</strong></span>
+        </div>
+        <div class="gap-buckets">
+            <div class="gap-bucket">
+              <div class="gap-count">47</div>
+              <div class="gap-detail">
+                <div class="gap-range">breaks between 5&ndash;60 min &mdash; $42</div>
+                <div class="gap-fix gap-fix-warn">1-hour TTL would prevent these, but its 60% write premium on <em>every</em> cache write costs more than the savings. Best fix: <code>/compact</code> before stepping away, or start a new session when you return.</div>
+              </div>
+            </div>
+            <div class="gap-bucket">
+              <div class="gap-count">29</div>
+              <div class="gap-detail">
+                <div class="gap-range">breaks over 1 hour &mdash; $42</div>
+                <div class="gap-fix">Fix: <code>/clear</code> before stepping away. Fresh start is cheaper than reloading.</div>
+              </div>
+            </div></div>
+    </div>
+
+    <div class="card size">
+      <div class="card-label">Session Size Impact</div>
+      
+        <div class="hero-single">
+          <span class="hero-num">4.6&times;</span>
+          <span class="hero-desc">more expensive per turn in your largest sessions</span>
+        </div>
+    <div class="size-bars">
+        <div class="size-row">
+          <span class="size-label">&lt; 100K</span>
+          <div class="size-track"><div class="size-fill" style="width:20%"></div></div>
+          <span class="size-value">$0.03/turn</span>
+          <span class="size-count">836 sessions</span>
+        </div>
+        <div class="size-row">
+          <span class="size-label">100&ndash;200K</span>
+          <div class="size-track"><div class="size-fill" style="width:100%"></div></div>
+          <span class="size-value">$0.17/turn</span>
+          <span class="size-count">215 sessions</span>
+        </div>
+        <div class="size-row">
+          <span class="size-label">&gt; 200K</span>
+          <div class="size-track"><div class="size-fill" style="width:94%"></div></div>
+          <span class="size-value">$0.16/turn</span>
+          <span class="size-count">9 sessions</span>
+        </div></div>
+    <p class="card-text">
+      Every turn re-reads your full conversation context. Bigger context = higher per-turn cost.
+      Use <code>/clear</code> at natural breakpoints to keep sessions lean.
+    </p>
+    </div>
+
+    <div class="card rec">
+      <div class="card-label">Recommendation</div>
+      
+        <div class="good">
+          <div class="good-icon">&check;</div>
+          <div class="good-text">
+            Your settings match your usage patterns. No changes needed &mdash; keep doing what you&rsquo;re doing.
+          </div>
+        </div>
+    </div>
+
+    
+  <div class="card calm">
+    <div class="card-label">What&rsquo;s Not Inflating Your Costs</div>
+    
+        <div class="nc-item">
+          <div class="nc-header">
+            <span class="nc-title">MCP servers &amp; tool calls</span>
+            <span class="nc-stat">~3% of spend</span>
+          </div>
+          <div class="nc-detail">
+            6 configured MCP servers
+            with 1362 tool calls across 72 sessions.
+            Tool definitions add ~3% overhead to your system prompt costs.
+            The rest of your context is the work itself.
+          </div>
+        </div>
+        <div class="nc-item">
+          <div class="nc-header">
+            <span class="nc-title">Output tokens</span>
+            <span class="nc-stat">~11% of spend</span>
+          </div>
+          <div class="nc-detail">
+            Despite being the most expensive token type at $25/MTok, Claude&rsquo;s responses
+            are a small fraction of your bill. The bulk goes to reading and caching
+            your conversation context.
+          </div>
+        </div>
+  </div>
+  </div>
+
 
   <details>
     <summary>How does this work?</summary>
     <div class="explainer">
-      <p><strong>Prompt caching:</strong> Claude Code caches your conversation context so it doesn&rsquo;t
-      need to re-process it every turn. This cache has a time-to-live (TTL) &mdash; 5 minutes by default,
-      or 1 hour if you enable extended caching.</p>
-      <p><strong>Cache miss:</strong> When the cache expires (you were idle too long), Claude has to
-      rebuild the entire cache from scratch. This is expensive &mdash; writing tokens to cache costs
-      12.5&times; more than reading from it.</p>
-      <p><strong>Why big sessions cost more:</strong> Every turn reads your full conversation context.
-      A session at 200K tokens reads 200K tokens per turn. At $0.50/MTok, that&rsquo;s $0.10 just
-      in cache reads &mdash; before any output.</p>
-      <p><strong>The 5-minute rule:</strong> If you&rsquo;re in a big session and need a break, either
-      switch to 1-hour TTL so the cache survives longer breaks, or run <code>/clear</code> before
-      stepping away so you don&rsquo;t pay to reload a huge context.</p>
+      <p><strong>Prompt caching:</strong> Claude Code saves your conversation in a cache so it doesn&rsquo;t
+      have to re-read everything on every turn. By default, this cache expires after <strong>5 minutes</strong>
+      of inactivity. You can extend it to <strong>1 hour</strong> by adding
+      <code>"CLAUDE_CODE_USE_EXTENDED_CACHE_TTL": "true"</code> to your Claude Code settings.</p>
+      <p><strong>Cache expiry:</strong> When the cache expires (you were idle too long), Claude has to
+      rebuild it from scratch. This is expensive &mdash; writing to cache costs
+      12.5&times; more than reading from it. This is the main source of &ldquo;wasted&rdquo; spend.</p>
+      <p><strong>Why big sessions cost more:</strong> Every turn reads your full conversation.
+      A session at 200K tokens reads all 200K per turn. At $0.50/MTok, that&rsquo;s $0.10 just
+      in reads &mdash; before Claude even responds.</p>
+      <p><strong>The 5-minute rule:</strong> If you&rsquo;re in a long session and need a break, either
+      extend the cache timeout to 1 hour (see above), or type <code>/compact</code> before
+      stepping away to shrink the session. If you&rsquo;ll be gone a while, <code>/clear</code>
+      starts fresh &mdash; cheaper than Claude reloading a huge conversation.</p>
     </div>
   </details>
 
   <div class="footer">
-    Generated by Claude Code Usage Advisor &middot; 2026-04-24 14:23
+    Generated by Claude Code Usage Advisor &middot; 2026-04-24 15:26
   </div>
 </div>
 
 <script>
+document.querySelectorAll('.range-btn').forEach(function(btn) {
+  btn.addEventListener('click', function() {
+    var range = this.getAttribute('data-range');
+    document.querySelectorAll('.range-btn').forEach(function(b) { b.classList.remove('active'); });
+    document.querySelectorAll('.range-panel').forEach(function(p) { p.classList.remove('active'); });
+    this.classList.add('active');
+    document.querySelector('.range-panel[data-range="' + range + '"]').classList.add('active');
+  });
+});
+
 function copyCmd(btn) {
   var code = btn.parentElement.querySelector('code');
   var text = code.textContent || code.innerText;

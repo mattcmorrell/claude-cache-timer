@@ -106,7 +106,13 @@ elif [ -n "$TIMESTAMP_FILE" ]; then
       if [ $OVER -gt 3600 ]; then
         HOURS=$((OVER / 3600))
         if [ "$CACHED_TOKENS" -gt "$DANGER_TOKEN_THRESHOLD" ] 2>/dev/null; then
-          CACHE_DISPLAY="${DANGER}☢ ${HOURS}h stale · /compact or new session${RESET}"
+          MTK=$(echo "scale=2; $CACHED_TOKENS / 1000000" | bc 2>/dev/null)
+          COST=$(echo "scale=2; $MTK * 3.45" | bc 2>/dev/null)
+          STALE_COST=""
+          if [ -n "$COST" ] && [ "$COST" != "0" ]; then
+            STALE_COST=" ~\$${COST} rebuild ·"
+          fi
+          CACHE_DISPLAY="${DANGER}☢ ${HOURS}h stale ·${STALE_COST} /compact or new session${RESET}"
         else
           CACHE_DISPLAY="${DIM}○ ${HOURS}h stale · /compact or new session${RESET}"
         fi
