@@ -1264,14 +1264,29 @@ def generate_team_html(team, report):
         </div>"""
 
         gap_buckets = ""
+        ttl_is_net_win = r.get("cache", {}).get("ttl_savings", 0) > 0
+        current_ttl = r.get("cache", {}).get("current_ttl", "5m")
         if t["gaps_5_60"]:
             cost_5_60 = sum(g["cost"] for g in t["gaps_5_60"])
+            if ttl_is_net_win and current_ttl == "5m":
+                gap_5_60_fix = "Fix: Switch to 1-hour cache TTL. These breaks won&rsquo;t expire the cache."
+                gap_5_60_cls = "gap-fix"
+            elif current_ttl == "1h":
+                gap_5_60_fix = "You&rsquo;re already on 1-hour TTL &mdash; these gaps are covered."
+                gap_5_60_cls = "gap-fix"
+            else:
+                gap_5_60_fix = (
+                    "1-hour TTL would prevent these, but its 60% write premium on <em>every</em> "
+                    "cache write costs more than the savings. Best fix: <code>/compact</code> before "
+                    "stepping away, or start a new session when you return."
+                )
+                gap_5_60_cls = "gap-fix gap-fix-warn"
             gap_buckets += f"""
             <div class="gap-bucket">
               <div class="gap-count">{len(t["gaps_5_60"])}</div>
               <div class="gap-detail">
                 <div class="gap-range">break{"s" if len(t["gaps_5_60"]) != 1 else ""} between 5&ndash;60 min &mdash; ${cost_5_60:.0f}</div>
-                <div class="gap-fix">Fix: Switch to 1-hour cache TTL. These breaks won&rsquo;t expire the cache.</div>
+                <div class="{gap_5_60_cls}">{gap_5_60_fix}</div>
               </div>
             </div>"""
         if t["gaps_over_1h"]:
@@ -1485,6 +1500,12 @@ def generate_team_html(team, report):
   .gap-detail {{ flex: 1; }}
   .gap-range {{ font-size: 15px; color: #c9d1d9; margin-bottom: 4px; }}
   .gap-fix {{ font-size: 14px; color: #3fb950; font-weight: 500; }}
+  .gap-fix-warn {{ color: #d29922; font-weight: 400; }}
+  .gap-fix-warn em {{ font-style: italic; }}
+  .gap-fix-warn code {{
+    background: #21262d; padding: 2px 6px; border-radius: 4px;
+    font-size: 13px; color: #79c0ff;
+  }}
   .gap-fix code {{
     background: #21262d; padding: 2px 6px; border-radius: 4px;
     font-size: 13px; color: #79c0ff;

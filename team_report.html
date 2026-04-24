@@ -1,0 +1,364 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Claude Usage Report &mdash; Mar 25 &ndash; Apr 24, 2026</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 0;
+    background: #0d1117; color: #e6edf3;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    font-size: 15px; line-height: 1.6;
+  }
+  .container {
+    max-width: 700px; margin: 0 auto;
+    padding: 48px 24px 80px;
+  }
+  header {
+    text-align: center; margin-bottom: 48px;
+    padding-bottom: 32px; border-bottom: 1px solid #21262d;
+  }
+  header h1 {
+    font-size: 28px; font-weight: 700; color: #f0f6fc;
+    margin: 0 0 8px;
+  }
+  .period { font-size: 16px; color: #8b949e; margin-bottom: 4px; }
+  .summary-line { font-size: 14px; color: #656d76; }
+
+  /* Cards */
+  .card {
+    background: #161b22; border: 1px solid #30363d;
+    border-radius: 12px; padding: 32px;
+    margin-bottom: 24px; border-left: 4px solid #30363d;
+  }
+  .card.miss { border-left-color: #f85149; }
+  .card.gaps { border-left-color: #d29922; }
+  .card.size { border-left-color: #58a6ff; }
+  .card.rec { border-left-color: #3fb950; }
+  .card-label {
+    font-size: 12px; font-weight: 600;
+    text-transform: uppercase; letter-spacing: 2px;
+    color: #8b949e; margin-bottom: 20px;
+  }
+  .card-text {
+    font-size: 14px; color: #9ca3af; line-height: 1.7; margin: 16px 0 0;
+  }
+  .card-text code {
+    background: #21262d; padding: 2px 6px; border-radius: 4px;
+    font-size: 13px; color: #79c0ff;
+  }
+
+  /* Good state */
+  .good {
+    display: flex; align-items: center; gap: 16px; padding: 8px 0;
+  }
+  .good-icon {
+    font-size: 28px; color: #3fb950; font-weight: 700;
+    min-width: 36px; text-align: center;
+  }
+  .good-text { font-size: 15px; color: #9ca3af; }
+
+  /* Hero pair (cache miss) */
+  .hero-pair {
+    display: flex; align-items: center; justify-content: center;
+    gap: 24px; margin-bottom: 24px;
+  }
+  .hero-item { text-align: center; }
+  .hero-num {
+    font-size: 48px; font-weight: 800; color: #f0f6fc; line-height: 1;
+  }
+  .hero-num.accent-red { color: #f85149; }
+  .hero-desc { font-size: 14px; color: #8b949e; margin-top: 4px; }
+  .hero-arrow { font-size: 28px; color: #484f58; margin-top: -20px; }
+
+  /* Bar comparison */
+  .bar-compare { margin: 20px 0; }
+  .bar-row {
+    display: grid; grid-template-columns: 50px 1fr 44px;
+    align-items: center; gap: 12px; margin-bottom: 8px;
+  }
+  .bar-label { font-size: 13px; color: #8b949e; text-align: right; }
+  .bar-track {
+    height: 24px; background: #21262d; border-radius: 6px; overflow: hidden;
+  }
+  .bar-fill {
+    height: 100%; border-radius: 6px; min-width: 4px;
+    animation: grow 0.8s cubic-bezier(.4,0,.2,1) forwards;
+  }
+  .bar-fill.neutral { background: #484f58; }
+  .bar-fill.hot { background: #f85149; }
+  @keyframes grow { from { width: 0; } }
+  .bar-pct { font-size: 14px; color: #e6edf3; font-weight: 600; }
+  .miss-stats {
+    font-size: 15px; color: #c9d1d9; text-align: center; margin: 16px 0;
+  }
+  .miss-stats strong { color: #f85149; }
+
+  /* Hero single */
+  .hero-single { margin-bottom: 20px; }
+  .hero-single .hero-num {
+    font-size: 48px; font-weight: 800; color: #f0f6fc;
+    line-height: 1; display: inline;
+  }
+  .hero-single .hero-desc {
+    font-size: 20px; color: #9ca3af; display: inline; margin-left: 12px;
+  }
+  .hero-single .hero-desc strong { color: #f0f6fc; }
+
+  /* Gap buckets */
+  .gap-buckets { margin: 16px 0; }
+  .gap-bucket {
+    display: flex; gap: 16px; align-items: flex-start;
+    padding: 16px 0; border-bottom: 1px solid #21262d;
+  }
+  .gap-bucket:last-child { border-bottom: none; }
+  .gap-count {
+    font-size: 28px; font-weight: 800; color: #f0f6fc;
+    min-width: 48px; text-align: center; line-height: 1; padding-top: 2px;
+  }
+  .gap-detail { flex: 1; }
+  .gap-range { font-size: 15px; color: #c9d1d9; margin-bottom: 4px; }
+  .gap-fix { font-size: 14px; color: #3fb950; font-weight: 500; }
+  .gap-fix-warn { color: #d29922; font-weight: 400; }
+  .gap-fix-warn em { font-style: italic; }
+  .gap-fix-warn code {
+    background: #21262d; padding: 2px 6px; border-radius: 4px;
+    font-size: 13px; color: #79c0ff;
+  }
+  .gap-fix code {
+    background: #21262d; padding: 2px 6px; border-radius: 4px;
+    font-size: 13px; color: #79c0ff;
+  }
+
+  /* Size bars */
+  .size-bars { margin: 16px 0; }
+  .size-row {
+    display: grid; grid-template-columns: 80px 1fr 90px 80px;
+    align-items: center; gap: 12px; margin-bottom: 8px;
+  }
+  .size-label { font-size: 13px; color: #8b949e; text-align: right; }
+  .size-track {
+    height: 20px; background: #21262d; border-radius: 5px; overflow: hidden;
+  }
+  .size-fill {
+    height: 100%; background: #58a6ff; border-radius: 5px; min-width: 4px;
+    animation: grow 0.8s cubic-bezier(.4,0,.2,1) forwards;
+  }
+  .size-value { font-size: 14px; color: #e6edf3; font-weight: 600; }
+  .size-count { font-size: 13px; color: #656d76; }
+
+  /* Recommendation */
+  .rec-priority {
+    font-size: 12px; font-weight: 700; color: #3fb950;
+    letter-spacing: 2px; margin-bottom: 8px;
+  }
+  .rec-title {
+    font-size: 22px; font-weight: 700; color: #f0f6fc; margin: 0 0 16px;
+  }
+  .rec-detail {
+    font-size: 14px; color: #9ca3af; line-height: 1.7; margin: 0 0 20px;
+  }
+  .setting-block {
+    background: #0d1117; border: 1px solid #30363d; border-radius: 8px;
+    padding: 16px 20px; position: relative;
+  }
+  .setting-block code {
+    color: #79c0ff; font-size: 13px; white-space: pre-wrap; line-height: 1.8;
+  }
+  .copy-btn {
+    position: absolute; top: 10px; right: 10px;
+    background: #21262d; border: 1px solid #30363d; color: #8b949e;
+    border-radius: 6px; padding: 4px 12px; font-size: 12px; cursor: pointer;
+  }
+  .copy-btn:hover { color: #e6edf3; border-color: #58a6ff; }
+  .also-consider {
+    margin-top: 20px; padding-top: 16px; border-top: 1px solid #21262d;
+  }
+  .also-label {
+    font-size: 12px; font-weight: 600; color: #8b949e;
+    text-transform: uppercase; letter-spacing: 1px; margin-bottom: 8px;
+  }
+  .also-consider ul { margin: 0; padding-left: 20px; }
+  .also-consider li {
+    font-size: 14px; color: #9ca3af; margin-bottom: 6px; line-height: 1.5;
+  }
+  .also-consider li strong { color: #c9d1d9; }
+
+  /* Explainer */
+  details { margin-top: 32px; }
+  details summary {
+    font-size: 14px; color: #8b949e; cursor: pointer; padding: 8px 0;
+  }
+  details summary:hover { color: #c9d1d9; }
+  .explainer {
+    font-size: 14px; color: #656d76; line-height: 1.7; padding: 16px 0;
+  }
+  .explainer p { margin: 0 0 12px; }
+  .explainer strong { color: #8b949e; }
+  .explainer code {
+    background: #21262d; padding: 2px 6px; border-radius: 4px;
+    font-size: 13px; color: #79c0ff;
+  }
+
+  .footer {
+    text-align: center; color: #484f58; font-size: 13px;
+    margin-top: 40px; padding-top: 16px; border-top: 1px solid #21262d;
+  }
+
+  @media (max-width: 640px) {
+    .hero-num { font-size: 36px; }
+    .hero-pair { gap: 16px; }
+    .size-row { grid-template-columns: 70px 1fr 80px; }
+    .size-count { display: none; }
+  }
+</style>
+</head>
+<body>
+<div class="container">
+  <header>
+    <h1>Your Claude Usage Report</h1>
+    <div class="period">Mar 25 &ndash; Apr 24, 2026</div>
+    <div class="summary-line">$1410 total &middot; 432 sessions &middot; $45/day avg</div>
+  </header>
+
+  <div class="card miss">
+    <div class="card-label">Cache Miss Tax</div>
+    
+        <div class="hero-pair">
+          <div class="hero-item">
+            <div class="hero-num">2%</div>
+            <div class="hero-desc">of your turns</div>
+          </div>
+          <div class="hero-arrow">&rarr;</div>
+          <div class="hero-item">
+            <div class="hero-num accent-red">15%</div>
+            <div class="hero-desc">of your budget</div>
+          </div>
+        </div>
+        <div class="bar-compare">
+          <div class="bar-row">
+            <span class="bar-label">Turns</span>
+            <div class="bar-track"><div class="bar-fill neutral" style="width:2.5%"></div></div>
+            <span class="bar-pct">2%</span>
+          </div>
+          <div class="bar-row">
+            <span class="bar-label">Cost</span>
+            <div class="bar-track"><div class="bar-fill hot" style="width:15.5%"></div></div>
+            <span class="bar-pct">15%</span>
+          </div>
+        </div>
+        <div class="miss-stats">
+          454 misses &middot; $218 total &middot;
+          <strong>7&times;</strong> normal turn cost
+        </div>
+        <p class="card-text">
+          When you step away for 5+ minutes during a session, the prompt cache expires.
+          Coming back means rebuilding it from scratch &mdash; and the bigger the session,
+          the more expensive the reload.
+        </p>
+  </div>
+
+  <div class="card gaps">
+    <div class="card-label">Idle Gap Penalty</div>
+    
+        <div class="hero-single">
+          <span class="hero-num">58</span>
+          <span class="hero-desc">idle breaks cost you <strong>$74</strong></span>
+        </div>
+        <div class="gap-buckets">
+            <div class="gap-bucket">
+              <div class="gap-count">32</div>
+              <div class="gap-detail">
+                <div class="gap-range">breaks between 5&ndash;60 min &mdash; $35</div>
+                <div class="gap-fix gap-fix-warn">1-hour TTL would prevent these, but its 60% write premium on <em>every</em> cache write costs more than the savings. Best fix: <code>/compact</code> before stepping away, or start a new session when you return.</div>
+              </div>
+            </div>
+            <div class="gap-bucket">
+              <div class="gap-count">26</div>
+              <div class="gap-detail">
+                <div class="gap-range">breaks over 1 hour &mdash; $38</div>
+                <div class="gap-fix">Fix: <code>/clear</code> before stepping away. Fresh start is cheaper than reloading.</div>
+              </div>
+            </div></div>
+  </div>
+
+  <div class="card size">
+    <div class="card-label">Session Size Impact</div>
+    
+        <div class="hero-single">
+          <span class="hero-num">4.7&times;</span>
+          <span class="hero-desc">more expensive per turn in your largest sessions</span>
+        </div>
+    <div class="size-bars">
+        <div class="size-row">
+          <span class="size-label">&lt; 100K</span>
+          <div class="size-track"><div class="size-fill" style="width:21%"></div></div>
+          <span class="size-value">$0.03/turn</span>
+          <span class="size-count">375 sessions</span>
+        </div>
+        <div class="size-row">
+          <span class="size-label">100&ndash;200K</span>
+          <div class="size-track"><div class="size-fill" style="width:64%"></div></div>
+          <span class="size-value">$0.10/turn</span>
+          <span class="size-count">48 sessions</span>
+        </div>
+        <div class="size-row">
+          <span class="size-label">&gt; 200K</span>
+          <div class="size-track"><div class="size-fill" style="width:100%"></div></div>
+          <span class="size-value">$0.16/turn</span>
+          <span class="size-count">9 sessions</span>
+        </div></div>
+    <p class="card-text">
+      Every turn re-reads your full conversation context. Bigger context = higher per-turn cost.
+      Use <code>/clear</code> at natural breakpoints to keep sessions lean.
+    </p>
+  </div>
+
+  <div class="card rec">
+    <div class="card-label">Recommendation</div>
+    
+        <div class="good">
+          <div class="good-icon">&check;</div>
+          <div class="good-text">
+            Your settings match your usage patterns. No changes needed &mdash; keep doing what you&rsquo;re doing.
+          </div>
+        </div>
+  </div>
+
+  <details>
+    <summary>How does this work?</summary>
+    <div class="explainer">
+      <p><strong>Prompt caching:</strong> Claude Code caches your conversation context so it doesn&rsquo;t
+      need to re-process it every turn. This cache has a time-to-live (TTL) &mdash; 5 minutes by default,
+      or 1 hour if you enable extended caching.</p>
+      <p><strong>Cache miss:</strong> When the cache expires (you were idle too long), Claude has to
+      rebuild the entire cache from scratch. This is expensive &mdash; writing tokens to cache costs
+      12.5&times; more than reading from it.</p>
+      <p><strong>Why big sessions cost more:</strong> Every turn reads your full conversation context.
+      A session at 200K tokens reads 200K tokens per turn. At $0.50/MTok, that&rsquo;s $0.10 just
+      in cache reads &mdash; before any output.</p>
+      <p><strong>The 5-minute rule:</strong> If you&rsquo;re in a big session and need a break, either
+      switch to 1-hour TTL so the cache survives longer breaks, or run <code>/clear</code> before
+      stepping away so you don&rsquo;t pay to reload a huge context.</p>
+    </div>
+  </details>
+
+  <div class="footer">
+    Generated by Claude Code Usage Advisor &middot; 2026-04-24 14:23
+  </div>
+</div>
+
+<script>
+function copyCmd(btn) {
+  var code = btn.parentElement.querySelector('code');
+  var text = code.textContent || code.innerText;
+  navigator.clipboard.writeText(text).then(function() {
+    btn.textContent = 'Copied!';
+    setTimeout(function() { btn.textContent = 'Copy'; }, 2000);
+  });
+}
+</script>
+</body>
+</html>
