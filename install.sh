@@ -62,13 +62,34 @@ echo "cache-timer: Added UserPromptSubmit hook"
 # Create state directory
 mkdir -p "$HOME/.claude/.cache-timer"
 
+# Install /usage-report slash command (template the script path)
+SKILL_DIR="$HOME/.claude/skills/usage-report"
+mkdir -p "$SKILL_DIR"
+sed "s|~/.claude/plugins/cache-timer/|$SCRIPT_DIR/|g" \
+  "$SCRIPT_DIR/skills/usage-report/SKILL.md" > "$SKILL_DIR/SKILL.md"
+echo "cache-timer: Installed /usage-report command"
+
+# Install /timer slash command
+TIMER_SKILL_DIR="$HOME/.claude/skills/timer"
+mkdir -p "$TIMER_SKILL_DIR"
+cp "$SCRIPT_DIR/skills/timer.md" "$TIMER_SKILL_DIR/SKILL.md"
+echo "cache-timer: Installed /timer command"
+
 echo ""
-echo "cache-timer: Installed! Restart Claude Code to see the cache timer in your status line."
+echo "cache-timer: Installed! Restart Claude Code to activate."
+echo ""
+echo "  The timer is off by default. Enable it per-session:"
+echo "    /timer        — toggle on/off for this session"
+echo "    /timer always — keep on across all sessions"
 echo ""
 echo "  States:"
 echo "    ◉ cached     — cache is warm (green)"
 echo "    ◎ 1m30s      — expiring soon (amber)"
-echo "    ○ expired 5m — cache gone, shows rebuild cost for large sessions"
-echo "    ○ 2h stale   — suggests /compact or new session"
+echo "    ○ expired 5m — cache gone, shows rebuild cost"
+echo "    ☢ expired 5m — large session, expensive rebuild (red)"
+echo ""
+echo "  Commands:"
+echo "    /timer        — toggle the status line"
+echo "    /usage-report — see your costs and get recommendations"
 echo ""
 echo "  To uninstall: bash $SCRIPT_DIR/uninstall.sh"

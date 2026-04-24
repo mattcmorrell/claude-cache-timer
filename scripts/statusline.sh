@@ -19,6 +19,22 @@ if command -v jq >/dev/null 2>&1; then
   [ -z "$CACHED_TOKENS" ] && CACHED_TOKENS=0
 fi
 
+# Check if timer is enabled for this session (or globally)
+ENABLED=false
+if [ -f "$CACHE_DIR/always" ]; then
+  ENABLED=true
+elif [ -n "$SESSION_ID" ] && [ -f "$CACHE_DIR/${SESSION_ID}.timer-on" ]; then
+  ENABLED=true
+fi
+
+if [ "$ENABLED" = false ]; then
+  # Pass through to existing ccstatusline only
+  if command -v ccstatusline >/dev/null 2>&1; then
+    echo "$INPUT" | ccstatusline 2>/dev/null
+  fi
+  exit 0
+fi
+
 # Per-session timestamp file, fallback to shared file
 TIMESTAMP_FILE=""
 if [ -n "$SESSION_ID" ] && [ -f "$CACHE_DIR/$SESSION_ID" ]; then
@@ -57,7 +73,11 @@ GREEN="\033[38;5;78m"
 AMBER="\033[38;5;179m"
 DIM="\033[38;5;242m"
 WARN="\033[38;5;209m"
+DANGER="\033[38;5;196m"
 RESET="\033[0m"
+
+# Danger thresholds — big session + expired cache = expensive rebuild
+DANGER_TOKEN_THRESHOLD=1000000
 
 # Calculate cache status
 CACHE_DISPLAY=""
@@ -85,7 +105,11 @@ elif [ -n "$TIMESTAMP_FILE" ]; then
 
       if [ $OVER -gt 3600 ]; then
         HOURS=$((OVER / 3600))
-        CACHE_DISPLAY="${DIM}○ ${HOURS}h stale · /compact or new session${RESET}"
+        if [ "$CACHED_TOKENS" -gt "$DANGER_TOKEN_THRESHOLD" ] 2>/dev/null; then
+          CACHE_DISPLAY="${DANGER}☢ ${HOURS}h stale · /compact or new session${RESET}"
+        else
+          CACHE_DISPLAY="${DIM}○ ${HOURS}h stale · /compact or new session${RESET}"
+        fi
 
       else
         if [ $OVER -lt 60 ]; then
@@ -103,7 +127,9 @@ elif [ -n "$TIMESTAMP_FILE" ]; then
           fi
         fi
 
-        if [ -n "$COST_NOTE" ]; then
+        if [ "$CACHED_TOKENS" -gt "$DANGER_TOKEN_THRESHOLD" ] 2>/dev/null && [ -n "$COST_NOTE" ]; then
+          CACHE_DISPLAY="${DANGER}☢ expired ${AGO_STR}${COST_NOTE}${RESET}"
+        elif [ -n "$COST_NOTE" ]; then
           CACHE_DISPLAY="${WARN}○ expired ${AGO_STR}${COST_NOTE}${RESET}"
         else
           CACHE_DISPLAY="${DIM}○ expired ${AGO_STR}${RESET}"
