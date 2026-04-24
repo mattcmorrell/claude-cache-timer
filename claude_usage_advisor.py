@@ -380,121 +380,104 @@ def run_analysis(sessions, costs_list):
     sessions_over_200k = sum(1 for ctx in max_contexts if ctx > 200_000)
     avg_max_context = sum(max_contexts) / len(max_contexts) if max_contexts else 0
 
-    # ── Build recommendations ────────────────────────────────────────────
-    recommendations = []
+    # ── Build cost drivers (top 3 by spend) ─────────────────────────────
+    drivers = []
+    total_output_tok = sum(c["output_tokens"] for c in costs_list)
 
-    # Rec 1: Cache TTL
-    monthly_ttl_savings = (ttl_savings / days) * 30 if ttl_savings > 1 and current_ttl == "5m" else 0
-    if total_avoidable > 0 and ttl_savings > 0 and current_ttl == "5m":
-        recommendations.append({
-            "id": "cache_ttl_1h",
-            "title": "Switch to 1-hour cache TTL",
-            "savings_monthly": monthly_ttl_savings,
-            "detail": (
-                f"You have {total_avoidable} idle gaps between 5-60 minutes that force "
-                f"expensive cache rebuilds. The 1h TTL costs 60% more per cache write "
-                f"but prevents these rebuilds entirely — a net win of ${ttl_savings:.2f} "
-                f"over this period."
-            ),
-            "setting": (
-                'Add to ~/.claude/settings.json:\n'
-                '  "env": { "CLAUDE_CODE_USE_EXTENDED_CACHE_TTL": "true" }'
-            ),
-        })
-    elif current_ttl == "1h" and total_avoidable == 0:
-        # Check if switching to 5m would save
-        cf_5m_total = sum(c["cf_5m"] for c in costs_list)
-        savings_5m = total_spend - cf_5m_total
-        if savings_5m > 1:
-            monthly_5m = (savings_5m / days) * 30
-            recommendations.append({
-                "id": "cache_ttl_5m",
-                "title": "Switch to 5-minute cache TTL",
-                "savings_monthly": monthly_5m,
-                "detail": (
-                    f"You're on 1h TTL but rarely have 5-60 min idle gaps. "
-                    f"The 5m TTL's cheaper write rate (1.25x vs 2x) would save "
-                    f"${savings_5m:.2f} over this period."
-                ),
-                "setting": (
-                    'Remove extended TTL from ~/.claude/settings.json env,\n'
-                    'or set: "CLAUDE_CODE_USE_EXTENDED_CACHE_TTL": "false"'
-                ),
-            })
+    driver_meta = {
+        "cache_read": ("Context re-reads", "#3fb950", cat_cache_read),
+        "cache_write": ("Cache rebuilds & writes", "#d29922", cat_cache_write),
+        "output": ("Output generation", "#79c0ff", cat_output),
+        "uncached_input": ("Uncached input", "#8b949e", cat_uncached),
+    }
 
-    # Rec 2: Opus 4.7 → 4.6 (same prices, but 4.6 tokenizer is ~25% more efficient)
-    if total_turns_4_7 > 0 and tokenizer_savings > 5:
-        monthly_4_6 = (tokenizer_savings / days) * 30
-        peak_str = fmt_tokens(peak_context_all) if peak_context_all else "?"
-        pct_saving = (1 - 1 / OPUS_47_TOKEN_INFLATION) * 100
-
-        detail = (
-            f"You have {total_turns_4_7} turns on Opus 4.7, costing "
-            f"${total_cost_4_7:.2f} over {days} days. Opus 4.7's tokenizer "
-            f"produces ~30-35% more tokens than 4.6 for the same content — "
-            f"same per-token price, but more tokens per turn. Switching to "
-            f"4.6 would reduce token counts by ~{pct_saving:.0f}%, saving an "
-            f"estimated ${tokenizer_savings:.2f} over this period."
+    # Cache reads
+    if cat_cache_read > 1:
+        desc = (
+            f"Every turn re-reads your full conversation context. "
+            f"Average peak context: {fmt_tokens(avg_max_context)}."
         )
-        if total_turns_over_200k > 0:
-            detail += (
-                f" Additionally, {total_turns_over_200k} turns exceeded 200K "
-                f"context (peak: {peak_str}) — 4.6's smaller context window "
-                f"forces earlier compaction, compounding the savings."
+        if sessions_over_200k > 0:
+            desc += f" {sessions_over_200k} sessions exceeded 200K tokens."
+        desc += " Larger contexts compound — each new turn re-processes everything."
+        drivers.append({"id": "cache_read", "description": desc, "tip": None})
+
+    # Cache writes
+    if cat_cache_write > 1:
+        desc = (
+            f"{total_rebuilds} cache rebuilds over the period"
+            f" ({total_mid_rebuilds} mid-session)."
+        )
+        if total_gaps_5_60 > 0 and current_ttl == "5m":
+            desc += f" {total_gaps_5_60} idle gaps (5-60 min) triggered cache expiry."
+        tip = None
+        if current_ttl == "5m" and ttl_savings > 0 and total_avoidable > 0:
+            tip = {
+                "text": (
+                    f"1h cache TTL would prevent {total_avoidable} avoidable rebuilds, "
+                    f"saving ~${ttl_savings:.0f} over this period."
+                ),
+                "setting": '"CLAUDE_CODE_USE_EXTENDED_CACHE_TTL": "true"',
+            }
+        elif current_ttl == "5m" and total_avoidable > 0 and ttl_savings <= 0:
+            desc += (
+                f" 1h TTL would prevent {total_avoidable} of these, but the "
+                f"60% write premium exceeds the savings — current 5m is optimal."
             )
+        elif current_ttl == "1h" and total_avoidable == 0:
+            cf_5m_total = sum(c["cf_5m"] for c in costs_list)
+            savings_5m = total_spend - cf_5m_total
+            if savings_5m > 1:
+                tip = {
+                    "text": (
+                        f"You rarely have 5-60 min idle gaps. The 5m TTL's cheaper write "
+                        f"rate would save ~${savings_5m:.0f} over this period."
+                    ),
+                    "setting": '"CLAUDE_CODE_USE_EXTENDED_CACHE_TTL": "false"',
+                }
+        drivers.append({"id": "cache_write", "description": desc, "tip": tip})
 
-        recommendations.append({
-            "id": "opus_4_6",
-            "title": "Switch from Opus 4.7 to 4.6",
-            "savings_monthly": monthly_4_6,
-            "detail": detail,
-            "setting": (
-                'Set your model version:\n'
-                '  claude --model claude-opus-4-6\n'
-                'Or in settings.json:\n'
-                '  "model": "claude-opus-4-6"'
+    # Output tokens
+    if cat_output > 1:
+        desc = (
+            f"Claude's responses — the most expensive token type at "
+            f"$25/MTok on Opus. {fmt_tokens(total_output_tok)} output tokens generated."
+        )
+        drivers.append({"id": "output", "description": desc, "tip": None})
+
+    # Uncached input (only if > 2% of spend)
+    if cat_uncached > total_spend * 0.02:
+        desc = "Input tokens not served from cache — typically small."
+        drivers.append({"id": "uncached_input", "description": desc, "tip": None})
+
+    # Attach metadata and sort by cost
+    for d in drivers:
+        title, color, cost = driver_meta[d["id"]]
+        d["title"] = title
+        d["color"] = color
+        d["cost"] = cost
+        d["pct"] = cost / total_spend * 100
+    drivers.sort(key=lambda d: d["cost"], reverse=True)
+
+    # Tokenizer note (cross-cutting — shown separately if meaningful)
+    tokenizer_note = None
+    if total_turns_4_7 > 0 and tokenizer_savings > 1:
+        monthly_tok_savings = (tokenizer_savings / days) * 30
+        tokenizer_note = {
+            "turns": total_turns_4_7,
+            "cost_4_7": total_cost_4_7,
+            "savings": tokenizer_savings,
+            "monthly_savings": monthly_tok_savings,
+            "pct_of_spend": tokenizer_savings / total_spend * 100,
+            "description": (
+                f"You have {total_turns_4_7} turns on Opus 4.7, whose tokenizer "
+                f"produces ~30-35% more tokens than 4.6 for the same content. "
+                f"Switching to 4.6 would reduce token counts by ~25%, "
+                f"saving ~${tokenizer_savings:.0f} "
+                f"(~${monthly_tok_savings:.0f}/mo)."
             ),
-        })
-
-    # Sort recommendations by savings (None last)
-    recommendations.sort(key=lambda r: r["savings_monthly"] or 0, reverse=True)
-    total_potential = sum(r["savings_monthly"] for r in recommendations if r["savings_monthly"])
-
-    # Top cost driver with contextual insight
-    categories = [
-        ("Output tokens", cat_output),
-        ("Cache writes", cat_cache_write),
-        ("Cache reads", cat_cache_read),
-        ("Uncached input", cat_uncached),
-    ]
-    categories.sort(key=lambda x: x[1], reverse=True)
-    top_driver = categories[0][0] if categories else "Unknown"
-
-    # Generate actionable insight based on dominant cost
-    if top_driver == "Cache reads":
-        cost_insight = (
-            f"Cache reads are your top cost ({categories[0][1]/total_spend*100:.0f}%) — "
-            f"not because they're expensive per token (they're the cheapest input type) "
-            f"but because your sessions accumulate large contexts. Every turn "
-            f"re-reads the full context. The biggest lever is keeping contexts smaller "
-            f"through earlier compaction — Opus 4.6's 200K window does this automatically."
-        )
-    elif top_driver == "Cache writes":
-        cost_insight = (
-            f"Cache writes are your top cost ({categories[0][1]/total_spend*100:.0f}%). "
-            f"This means you're frequently rebuilding the cache — either from cache expiry "
-            f"(idle gaps), many short sessions, or tool-heavy workflows. Check your cache "
-            f"TTL setting and idle patterns above."
-        )
-    elif top_driver == "Output tokens":
-        cost_insight = (
-            f"Output tokens are your top cost ({categories[0][1]/total_spend*100:.0f}%). "
-            f"This is the most expensive token type ($25-30/MTok on Opus). The biggest lever "
-            f"is context size — smaller contexts mean fewer tokens processed per turn, "
-            f"leaving more budget for output."
-        )
-    else:
-        cost_insight = ""
+            "setting": "claude --model claude-opus-4-6",
+        }
 
     return {
         "period": {
@@ -529,11 +512,6 @@ def run_analysis(sessions, costs_list):
             "gaps_over_1h": total_gaps_1h,
             "avoidable_misses": total_avoidable,
             "ttl_savings": ttl_savings,
-            "ttl_note": (
-                f"1h TTL would prevent {total_avoidable} rebuilds from 5-60m gaps, "
-                f"but the 60% write premium on ALL cache writes exceeds the savings. "
-                f"Current 5m TTL is cost-optimal."
-            ) if total_avoidable > 0 and ttl_savings <= 0 and current_ttl == "5m" else None,
         },
         "sessions": {
             "top": top_sessions,
@@ -549,12 +527,82 @@ def run_analysis(sessions, costs_list):
             "cost_4_7": total_cost_4_7,
             "tokenizer_savings": tokenizer_savings,
         },
-        "top_driver": top_driver,
-        "cost_insight": cost_insight,
-        "categories_ranked": categories,
-        "recommendations": recommendations,
-        "total_potential_savings": total_potential,
-        "_raw_costs": costs_list,
+        "drivers": drivers[:3],
+        "tokenizer_note": tokenizer_note,
+    }
+
+
+# ── Team insights ────────────────────────────────────────────────────────────
+
+def compute_team_insights(sessions, costs_list):
+    """Compute plain-English insights for the team-facing dashboard."""
+    total_turns = 0
+    rebuild_turns = 0
+    rebuild_cost = 0.0
+    normal_turns = 0
+    normal_cost = 0.0
+    gap_rebuilds = []
+
+    for s, c in zip(sessions, costs_list):
+        tcs = c["turn_costs"]
+        for i, tc in enumerate(tcs):
+            total_turns += 1
+            if tc["is_rebuild"] and i > 0:
+                rebuild_turns += 1
+                rebuild_cost += tc["actual"]
+                t1 = tc["timestamp"]
+                t0 = tcs[i - 1]["timestamp"]
+                if t1 and t0:
+                    gap_s = (t1 - t0).total_seconds()
+                    gap_rebuilds.append({"gap_s": gap_s, "cost": tc["actual"]})
+            else:
+                normal_turns += 1
+                normal_cost += tc["actual"]
+
+    total_cost = rebuild_cost + normal_cost
+    avg_normal = normal_cost / max(1, normal_turns)
+    avg_rebuild = rebuild_cost / max(1, rebuild_turns)
+    multiplier = avg_rebuild / avg_normal if avg_normal > 0.001 else 0
+
+    gaps_5_60 = [g for g in gap_rebuilds if 300 < g["gap_s"] <= 3600]
+    gaps_over_1h = [g for g in gap_rebuilds if g["gap_s"] > 3600]
+
+    small, medium, large = [], [], []
+    for s, c in zip(sessions, costs_list):
+        ctx = c["max_context_tokens"]
+        cpt = c["actual"] / max(1, c["turns"])
+        if ctx < 100_000:
+            small.append(cpt)
+        elif ctx < 200_000:
+            medium.append(cpt)
+        else:
+            large.append(cpt)
+
+    def avg_or_zero(lst):
+        return sum(lst) / len(lst) if lst else 0
+
+    small_cpt = avg_or_zero(small)
+    medium_cpt = avg_or_zero(medium)
+    large_cpt = avg_or_zero(large)
+    baseline = small_cpt or medium_cpt or 0.001
+    size_mult = large_cpt / baseline if large_cpt and baseline > 0.001 else 0
+
+    return {
+        "total_turns": total_turns,
+        "total_cost": total_cost,
+        "rebuild_turns": rebuild_turns,
+        "rebuild_pct_turns": (rebuild_turns / max(1, total_turns)) * 100,
+        "rebuild_cost": rebuild_cost,
+        "rebuild_pct_cost": (rebuild_cost / max(0.001, total_cost)) * 100,
+        "normal_avg_cost": avg_normal,
+        "rebuild_avg_cost": avg_rebuild,
+        "rebuild_multiplier": multiplier,
+        "gaps_5_60": gaps_5_60,
+        "gaps_over_1h": gaps_over_1h,
+        "size_small": {"count": len(small), "avg_cpt": small_cpt},
+        "size_medium": {"count": len(medium), "avg_cpt": medium_cpt},
+        "size_large": {"count": len(large), "avg_cpt": large_cpt},
+        "size_multiplier": size_mult,
     }
 
 
@@ -622,8 +670,6 @@ def print_text_report(report):
     if c["gaps_5_60"] > 0 or c["gaps_over_1h"] > 0:
         print(f"  Idle gaps 5-60m:       {c['gaps_5_60']}  (would be avoidable with 1h TTL)")
         print(f"  Idle gaps >1h:         {c['gaps_over_1h']}  (unavoidable)")
-    if c.get("ttl_note"):
-        print(f"\n  NOTE: {c['ttl_note']}")
 
     # ── Top sessions
     print(f"\n  TOP SESSIONS")
@@ -637,54 +683,30 @@ def print_text_report(report):
     top5_cost = sum(s["cost"] for s in r["sessions"]["top"][:5])
     print(f"\n  Top 5 = ${top5_cost:.2f} ({top5_cost / o['total_spend'] * 100:.0f}% of total)")
 
-    # ── Recommendations
-    recs = r["recommendations"]
-    if recs:
-        print(f"\n  RECOMMENDATIONS")
-        print(f"  {'─' * 50}")
-        print(f"  Sorted by estimated monthly savings:\n")
-        for i, rec in enumerate(recs, 1):
-            sav = f"~${rec['savings_monthly']:.0f}/mo" if rec["savings_monthly"] else "TBD"
-            print(f"  [{i}] {rec['title']:<42} {sav}")
-            print(f"  {'┌' + '─' * 62 + '┐'}")
-            for line in rec["detail"].split(". "):
-                line = line.strip()
-                if not line:
-                    continue
-                if not line.endswith("."):
-                    line += "."
-                while len(line) > 60:
-                    sp = line[:60].rfind(" ")
-                    if sp == -1:
-                        sp = 60
-                    print(f"  │ {line[:sp]:<61}│")
-                    line = line[sp:].strip()
-                print(f"  │ {line:<61}│")
-            print(f"  │{' ' * 62}│")
-            for line in rec["setting"].split("\n"):
-                print(f"  │ {line:<61}│")
-            print(f"  {'└' + '─' * 62 + '┘'}")
-            print()
-
-        if r["total_potential_savings"] > 0:
-            print(f"  ESTIMATED MONTHLY SAVINGS: ~${r['total_potential_savings']:.0f} "
-                  f"({r['total_potential_savings'] / (o['daily_avg'] * 30) * 100:.0f}% of projected spend)")
-    else:
-        print(f"\n  No parameter changes recommended — your settings look well-tuned")
-        print(f"  for your usage patterns. Keep doing what you're doing.")
-
-    if r.get("cost_insight"):
-        print(f"\n  KEY INSIGHT")
-        print(f"  {'─' * 50}")
-        insight = r["cost_insight"]
-        while len(insight) > 64:
-            sp = insight[:64].rfind(" ")
+    # ── Top cost drivers
+    drivers = r["drivers"]
+    print(f"\n  TOP COST DRIVERS")
+    print(f"  {'─' * 50}")
+    for i, d in enumerate(drivers, 1):
+        print(f"  [{i}] {d['title']:<34} ${d['cost']:>8.2f}  ({d['pct']:.0f}%)")
+        desc = d["description"]
+        while len(desc) > 62:
+            sp = desc[:62].rfind(" ")
             if sp == -1:
-                sp = 64
-            print(f"  {insight[:sp]}")
-            insight = insight[sp:].strip()
-        if insight:
-            print(f"  {insight}")
+                sp = 62
+            print(f"      {desc[:sp]}")
+            desc = desc[sp:].strip()
+        if desc:
+            print(f"      {desc}")
+        if d.get("tip"):
+            print(f"      TIP: {d['tip']['text']}")
+        print()
+
+    tn = r.get("tokenizer_note")
+    if tn:
+        print(f"  NOTE: {tn['description']}")
+        print(f"        Setting: {tn['setting']}")
+        print()
 
     print(f"\n  Run with --html > report.html for a shareable version.")
     print()
@@ -692,55 +714,15 @@ def print_text_report(report):
 
 # ── HTML report (slideshow) ──────────────────────────────────────────────────
 
-def _rec_visual(rec, report):
-    """Build a simple visual element for a recommendation slide."""
-    rid = rec["id"]
-    if rid == "opus_4_6":
-        ov = report.get("opus_versions", {})
-        turns_4_7 = ov.get("turns_4_7", 0)
-        turns_over = ov.get("turns_over_200k", 0)
-        pct_46 = int(100 / OPUS_47_TOKEN_INFLATION)
-
-        return f"""
-        <div class="visual comparison">
-          <div class="comp-row">
-            <div class="comp-label">Opus 4.7 tokens</div>
-            <div class="comp-track"><div class="comp-fill" style="width:100%;background:#bc8cff"></div></div>
-            <div class="comp-value">~135</div>
-          </div>
-          <div class="comp-row">
-            <div class="comp-label">Opus 4.6 tokens</div>
-            <div class="comp-track"><div class="comp-fill" style="width:{pct_46}%;background:#79c0ff"></div></div>
-            <div class="comp-value">~100</div>
-          </div>
-          <div class="comp-diff">same content, ~25% fewer tokens on 4.6{f" &middot; {turns_over} turns over 200K" if turns_over > 0 else ""}</div>
+def _driver_visual(driver):
+    """Build a visual element for a cost driver slide."""
+    pct = driver["pct"]
+    color = driver["color"]
+    return f"""
+        <div class="visual driver-bar">
+          <div class="driver-track"><div class="driver-fill" style="width:{pct:.1f}%;background:{color}"></div></div>
+          <div class="driver-cost-line">${driver['cost']:.0f} of total spend</div>
         </div>"""
-    elif rid == "cache_ttl_1h":
-        n = report["cache"]["avoidable_misses"]
-        return f"""
-        <div class="visual stat-block">
-          <div class="stat-big">{n}</div>
-          <div class="stat-desc">avoidable cache rebuilds</div>
-          <div class="stat-sub">from 5-60 min idle gaps — each one re-writes your full context</div>
-        </div>"""
-    elif rid == "cache_ttl_5m":
-        days = report["period"]["days"]
-        sav = (rec["savings_monthly"] or 0) / 30 * days
-        return f"""
-        <div class="visual stat-block">
-          <div class="stat-big">${sav:.0f}</div>
-          <div class="stat-desc">saved with cheaper 5m write rate</div>
-          <div class="stat-sub">1.25x vs 2x per cache write token</div>
-        </div>"""
-    elif rid == "context_bloat":
-        n = report["sessions"]["sessions_over_500k"]
-        return f"""
-        <div class="visual stat-block">
-          <div class="stat-big">{n}</div>
-          <div class="stat-desc">sessions over 500K context tokens</div>
-          <div class="stat-sub">large contexts drive up per-turn read costs</div>
-        </div>"""
-    return ""
 
 
 def generate_html(report):
@@ -748,7 +730,8 @@ def generate_html(report):
     p = r["period"]
     o = r["overview"]
     c = r["cache"]
-    recs = r["recommendations"]
+    drivers = r["drivers"]
+    tn = r.get("tokenizer_note")
 
     start_str = p["start"].strftime("%b %d") if p["start"] else "?"
     end_str = p["end"].strftime("%b %d, %Y") if p["end"] else "?"
@@ -756,28 +739,25 @@ def generate_html(report):
     # ── Build slides ─────────────────────────────────────────────────────
     slides = []
 
-    # Slide 0: Summary — answer the question upfront
-    if recs:
-        n = len(recs)
-        summary_answer = "Yes."
-        summary_answer_class = "summary-yes"
-        summary_detail = (
-            f'{n} easy setting{"s" if n != 1 else ""} change{"s" if n != 1 else ""} '
-            f'could save ~${r["total_potential_savings"]:.0f}/mo'
+    # Slide 0: Summary — top 3 cost drivers at a glance
+    driver_bullets = ""
+    for i, d in enumerate(drivers, 1):
+        driver_bullets += (
+            f'<div class="summary-driver">'
+            f'<span class="sd-num">{i}.</span>'
+            f'<span class="sd-title">{d["title"]}</span>'
+            f'<span class="sd-pct" style="color:{d["color"]}">{d["pct"]:.0f}%</span>'
+            f'</div>'
         )
-        summary_sub = "No workflow changes — just parameter tuning."
-    else:
-        summary_answer = "Nope, you're good."
-        summary_answer_class = "summary-no"
-        summary_detail = "Your Claude is configured well for how you work."
-        summary_sub = "No easy wins found — your settings match your usage patterns."
+
+    has_tips = any(d.get("tip") for d in drivers) or tn
+    tip_line = '<div class="summary-sub">Settings tweaks available — see details.</div>' if has_tips else '<div class="summary-sub">Your settings look well-tuned for how you work.</div>'
 
     slides.append(f"""
       <div class="slide-inner summary">
-        <div class="summary-q">Is there anything you can easily change<br>to make your tokens go further?</div>
-        <div class="{summary_answer_class}">{summary_answer}</div>
-        <div class="summary-detail">{summary_detail}</div>
-        <div class="summary-sub">{summary_sub}</div>
+        <div class="summary-q">Your top cost drivers</div>
+        <div class="summary-drivers">{driver_bullets}</div>
+        {tip_line}
       </div>""")
 
     # Slide 1: Spend overview
@@ -789,57 +769,61 @@ def generate_html(report):
         <div class="cover-meta">{o['session_count']} sessions &middot; {p['days']} days &middot; ${o['daily_avg']:.0f}/day avg</div>
       </div>""")
 
-    # Slides 1-N: Recommendations
-    for rec in recs:
-        sav = f"~${rec['savings_monthly']:.0f}/mo" if rec["savings_monthly"] else ""
-        visual = _rec_visual(rec, r)
-        setting_html = rec["setting"].replace("\n", "<br>").replace("  ", "&nbsp;&nbsp;")
+    # Slides 2-4: Top 3 cost drivers
+    for d in drivers:
+        visual = _driver_visual(d)
+        tip_html = ""
+        if d.get("tip"):
+            tip_html = f"""
+            <div class="tip-block">
+              <div class="tip-label">Tip</div>
+              <div class="tip-text">{d['tip']['text']}</div>
+              <code>{d['tip']['setting']}</code>
+            </div>"""
 
         slides.append(f"""
-      <div class="slide-inner rec">
-        <div class="rec-savings">{sav}</div>
-        <h2>{rec['title']}</h2>
+      <div class="slide-inner driver">
+        <div class="driver-pct" style="color:{d['color']}">{d['pct']:.0f}%</div>
+        <h2>{d['title']}</h2>
         {visual}
-        <p class="rec-detail">{rec['detail']}</p>
-        <div class="setting-block">
-          <code>{setting_html}</code>
-          <button class="copy-btn" onclick="copyCmd(this)">Copy</button>
+        <p class="driver-detail">{d['description']}</p>
+        {tip_html}
+      </div>""")
+
+    # Tokenizer note slide (if present)
+    if tn:
+        pct_46 = int(100 / OPUS_47_TOKEN_INFLATION)
+        slides.append(f"""
+      <div class="slide-inner driver">
+        <div class="driver-pct" style="color:#bc8cff">{tn['pct_of_spend']:.1f}%</div>
+        <h2>Opus 4.7 tokenizer overhead</h2>
+        <div class="visual comparison">
+          <div class="comp-row">
+            <div class="comp-label">4.7 tokens</div>
+            <div class="comp-track"><div class="comp-fill" style="width:100%;background:#bc8cff"></div></div>
+            <div class="comp-value">~135</div>
+          </div>
+          <div class="comp-row">
+            <div class="comp-label">4.6 tokens</div>
+            <div class="comp-track"><div class="comp-fill" style="width:{pct_46}%;background:#79c0ff"></div></div>
+            <div class="comp-value">~100</div>
+          </div>
+          <div class="comp-diff">same content, same price per token</div>
+        </div>
+        <p class="driver-detail">{tn['description']}</p>
+        <div class="tip-block">
+          <div class="tip-label">Setting</div>
+          <code>{tn['setting']}</code>
         </div>
       </div>""")
 
-    # Action plan slide
-    action_items = ""
-    for i, rec in enumerate(recs, 1):
-        sav = f"~${rec['savings_monthly']:.0f}/mo" if rec["savings_monthly"] else ""
-        lines = rec["setting"].strip().split("\n")
-        cmd = next((l.strip() for l in lines if l.strip() and not l.strip().startswith(("#", "Or", "Upgrade", "Switch", "Remove", "or set", "For"))), lines[0].strip())
-        action_items += f"""
-          <div class="action-item">
-            <div class="action-num">{i}</div>
-            <div class="action-body">
-              <div class="action-title">{rec['title']}</div>
-              <code>{cmd}</code>
-            </div>
-            <div class="action-sav">{sav}</div>
-          </div>"""
-
-    if not recs:
-        action_items = """
-          <div class="all-good-card">
-            <div class="ag-label">All clear</div>
-            <div class="ag-text">Your Claude Code settings match your usage patterns.<br>No changes needed.</div>
-          </div>"""
-
-    total_sav = r["total_potential_savings"]
-    projected = o["daily_avg"] * 30
-    sav_pct = (total_sav / projected * 100) if projected > 0 else 0
-    savings_line = f'<div class="total-savings">~${total_sav:.0f}/mo estimated savings ({sav_pct:.0f}% of projected spend)</div>' if total_sav > 0 else ""
-
+    # Final slide: see full report
     slides.append(f"""
       <div class="slide-inner action">
-        <h2>{"Your Action Plan" if recs else "Summary"}</h2>
-        <div class="action-list">{action_items}</div>
-        {savings_line}
+        <h2>Full Report</h2>
+        <div class="all-good-card">
+          <div class="ag-text">Scroll down or click below for the detailed breakdown.</div>
+        </div>
         <button class="see-report" onclick="document.getElementById('appendix').scrollIntoView({{behavior:'smooth'}})">See full report</button>
       </div>""")
 
@@ -888,8 +872,10 @@ def generate_html(report):
           <td>{s['turns']}</td><td>{fmt_dur(s['duration_min'])}</td>
           <td>{s['model'].capitalize()}</td><td>{ctx}</td></tr>"""
 
-    ttl_note = f'<p class="a-note">{c.get("ttl_note","")}</p>' if c.get("ttl_note") else ""
-    insight = f'<div class="a-card"><h3>Key Insight</h3><p>{r.get("cost_insight","")}</p></div>' if r.get("cost_insight") else ""
+    # Build tokenizer note for appendix
+    tn_html = ""
+    if tn:
+        tn_html = f'<div class="a-card"><h3>Opus 4.7 Tokenizer</h3><p>{tn["description"]}</p></div>'
 
     return f"""<!DOCTYPE html>
 <html lang="en">
@@ -934,42 +920,66 @@ def generate_html(report):
   .cover-sub {{ font-size: 22px; color: #c9d1d9; margin-bottom: 8px; }}
   /* ── Summary (first slide) ── */
   .summary-q {{
-    font-size: 22px; color: #8b949e; line-height: 1.5;
-    margin-bottom: 40px;
+    font-size: 28px; font-weight: 700; color: #f0f6fc;
+    margin-bottom: 36px;
   }}
-  .summary-yes {{
-    font-size: 72px; font-weight: 800; color: #3fb950;
-    line-height: 1; margin-bottom: 16px;
+  .summary-drivers {{
+    text-align: left; max-width: 420px; margin: 0 auto 32px;
   }}
-  .summary-no {{
-    font-size: 48px; font-weight: 800; color: #58a6ff;
-    line-height: 1; margin-bottom: 16px;
+  .summary-driver {{
+    display: flex; align-items: baseline; gap: 10px;
+    padding: 12px 0; border-bottom: 1px solid #21262d;
+    font-size: 18px;
   }}
-  .summary-detail {{
-    font-size: 22px; color: #e6edf3; margin-bottom: 8px;
-  }}
+  .sd-num {{ color: #484f58; font-weight: 600; min-width: 28px; }}
+  .sd-title {{ flex: 1; color: #c9d1d9; }}
+  .sd-pct {{ font-size: 24px; font-weight: 800; }}
   .summary-sub {{
-    font-size: 16px; color: #484f58;
+    font-size: 15px; color: #484f58;
   }}
 
-  /* ── Rec slides ── */
-  .rec .rec-savings {{
-    font-size: 44px; font-weight: 800; color: #3fb950;
-    margin-bottom: 4px; line-height: 1;
+  /* ── Driver slides ── */
+  .driver .driver-pct {{
+    font-size: 64px; font-weight: 800;
+    line-height: 1; margin-bottom: 4px;
   }}
-  .rec h2 {{
-    font-size: 26px; font-weight: 600; color: #f0f6fc;
-    margin: 0 0 24px;
+  .driver h2 {{
+    font-size: 24px; font-weight: 600; color: #f0f6fc;
+    margin: 0 0 20px;
   }}
-  .rec .rec-detail {{
+  .driver .driver-detail {{
     font-size: 15px; color: #8b949e;
-    margin: 20px 0 28px; text-align: left; line-height: 1.7;
+    margin: 16px 0 24px; text-align: left; line-height: 1.7;
+  }}
+  .driver-bar {{ margin: 16px 0; }}
+  .driver-track {{
+    height: 40px; background: #21262d; border-radius: 8px; overflow: hidden;
+  }}
+  .driver-fill {{
+    height: 100%; border-radius: 8px;
+    transition: width 0.8s cubic-bezier(.4,0,.2,1) 0.15s;
+  }}
+  .slide:not(.active) .driver-fill {{ width: 0 !important; }}
+  .driver-cost-line {{
+    font-size: 14px; color: #8b949e; margin-top: 6px; text-align: right;
   }}
 
-  /* Comparison bars */
+  /* Tip block */
+  .tip-block {{
+    background: #0d1d31; border: 1px solid #1f6feb; border-radius: 10px;
+    padding: 16px 20px; text-align: left; margin-top: 8px;
+  }}
+  .tip-label {{
+    font-size: 13px; font-weight: 600; color: #58a6ff;
+    text-transform: uppercase; letter-spacing: 1px; margin-bottom: 6px;
+  }}
+  .tip-text {{ font-size: 14px; color: #c9d1d9; margin-bottom: 8px; line-height: 1.5; }}
+  .tip-block code {{ color: #79c0ff; font-size: 14px; }}
+
+  /* Comparison bars (tokenizer slide) */
   .comparison {{ margin: 24px 0; }}
   .comp-row {{
-    display: grid; grid-template-columns: 140px 1fr 80px;
+    display: grid; grid-template-columns: 120px 1fr 80px;
     align-items: center; gap: 12px; margin-bottom: 10px;
   }}
   .comp-label {{ font-size: 14px; color: #c9d1d9; text-align: right; }}
@@ -983,63 +993,18 @@ def generate_html(report):
   .slide:not(.active) .comp-fill {{ width: 0 !important; }}
   .comp-value {{ font-size: 20px; font-weight: 700; color: #f0f6fc; }}
   .comp-diff {{
-    text-align: right; font-size: 14px; color: #3fb950;
-    margin-top: 4px; font-weight: 600;
+    text-align: center; font-size: 14px; color: #8b949e;
+    margin-top: 4px;
   }}
 
-  /* Stat block */
-  .stat-block {{ margin: 28px 0; }}
-  .stat-block .stat-big {{
-    font-size: 72px; font-weight: 800; color: #f0f6fc; line-height: 1;
-    opacity: 1; transform: translateY(0);
-    transition: opacity 0.5s ease 0.1s, transform 0.5s ease 0.1s;
-  }}
-  .slide:not(.active) .stat-big {{ opacity: 0; transform: translateY(24px); }}
-  .stat-block .stat-desc {{ font-size: 20px; color: #8b949e; margin-top: 8px; }}
-  .stat-block .stat-sub {{ font-size: 14px; color: #484f58; margin-top: 4px; }}
-
-  /* Setting block */
-  .setting-block {{
-    background: #161b22; border: 1px solid #30363d; border-radius: 10px;
-    padding: 20px 24px; text-align: left; position: relative;
-  }}
-  .setting-block code {{
-    color: #79c0ff; font-size: 14px; white-space: pre-wrap; line-height: 1.8;
-  }}
-  .copy-btn {{
-    position: absolute; top: 12px; right: 12px;
-    background: #21262d; border: 1px solid #30363d; color: #8b949e;
-    border-radius: 6px; padding: 4px 14px; font-size: 13px; cursor: pointer;
-  }}
-  .copy-btn:hover {{ color: #e6edf3; border-color: #58a6ff; }}
-
-  /* ── Action plan ── */
+  /* ── Final slide ── */
   .action h2 {{
     font-size: 28px; font-weight: 600; color: #f0f6fc; margin: 0 0 32px;
-  }}
-  .action-list {{ text-align: left; }}
-  .action-item {{
-    display: flex; align-items: center; gap: 16px;
-    background: #161b22; border: 1px solid #30363d;
-    border-left: 3px solid #3fb950; border-radius: 10px;
-    padding: 20px 24px; margin-bottom: 12px;
-  }}
-  .action-num {{
-    font-size: 28px; font-weight: 800; color: #3fb950; min-width: 36px;
-  }}
-  .action-body {{ flex: 1; }}
-  .action-title {{ font-size: 16px; font-weight: 600; color: #f0f6fc; margin-bottom: 4px; }}
-  .action-body code {{ font-size: 13px; color: #79c0ff; }}
-  .action-sav {{ font-size: 18px; font-weight: 700; color: #3fb950; white-space: nowrap; }}
-  .total-savings {{
-    font-size: 22px; font-weight: 600; color: #3fb950;
-    margin: 28px 0 16px; text-align: center;
   }}
   .all-good-card {{
     background: #0d1d31; border: 1px solid #1f6feb; border-radius: 10px;
     padding: 32px; text-align: center;
   }}
-  .ag-label {{ font-size: 28px; font-weight: 700; color: #58a6ff; margin-bottom: 8px; }}
   .ag-text {{ font-size: 16px; color: #8b949e; }}
   .see-report {{
     background: none; border: 1px solid #30363d; color: #8b949e;
@@ -1123,11 +1088,10 @@ def generate_html(report):
 
   @media (max-width: 640px) {{
     .big-number {{ font-size: 56px; }}
-    .rec .rec-savings {{ font-size: 36px; }}
-    .stat-block .stat-big {{ font-size: 48px; }}
+    .driver .driver-pct {{ font-size: 48px; }}
     .comp-row {{ grid-template-columns: 100px 1fr 64px; }}
-    .action-item {{ flex-wrap: wrap; }}
-    .action-sav {{ width: 100%; text-align: left; padding-left: 52px; }}
+    .summary-driver {{ font-size: 16px; }}
+    .sd-pct {{ font-size: 20px; }}
   }}
 </style>
 </head>
@@ -1162,7 +1126,6 @@ def generate_html(report):
       <div class="a-stat"><div class="val">{c['gaps_5_60']}</div><div class="lbl">Gaps 5-60m</div></div>
       <div class="a-stat"><div class="val">{c['gaps_over_1h']}</div><div class="lbl">Gaps &gt;1h</div></div>
     </div>
-    {ttl_note}
   </div>
 
   <h2>Top Sessions</h2>
@@ -1173,7 +1136,7 @@ def generate_html(report):
     </table>
   </div>
 
-  {insight}
+  {tn_html}
 
   <div class="a-footer">
     Generated by Claude Code Usage Advisor &middot; {datetime.now().strftime("%Y-%m-%d %H:%M")}
@@ -1221,7 +1184,447 @@ def generate_html(report):
     if (Math.abs(dx) > 50) go(dx < 0 ? cur + 1 : cur - 1);
   }});
 }})();
+</script>
+</body>
+</html>"""
 
+
+# ── Team HTML report ─────────────────────────────────────────────────────────
+
+def generate_team_html(team, report):
+    """Generate a team-friendly HTML insights report."""
+    t = team
+    r = report
+    p = r["period"]
+    o = r["overview"]
+
+    start_str = p["start"].strftime("%b %d") if p["start"] else "?"
+    end_str = p["end"].strftime("%b %d, %Y") if p["end"] else "?"
+
+    # ── Cache miss card ──────────────────────────────────────────────────
+    if t["rebuild_turns"] == 0:
+        miss_card = """
+        <div class="good">
+          <div class="good-icon">&check;</div>
+          <div class="good-text">No mid-session cache misses detected. Your cache efficiency is excellent.</div>
+        </div>"""
+    else:
+        miss_pct_turns = t["rebuild_pct_turns"]
+        miss_pct_cost = t["rebuild_pct_cost"]
+        miss_card = f"""
+        <div class="hero-pair">
+          <div class="hero-item">
+            <div class="hero-num">{miss_pct_turns:.0f}%</div>
+            <div class="hero-desc">of your turns</div>
+          </div>
+          <div class="hero-arrow">&rarr;</div>
+          <div class="hero-item">
+            <div class="hero-num accent-red">{miss_pct_cost:.0f}%</div>
+            <div class="hero-desc">of your budget</div>
+          </div>
+        </div>
+        <div class="bar-compare">
+          <div class="bar-row">
+            <span class="bar-label">Turns</span>
+            <div class="bar-track"><div class="bar-fill neutral" style="width:{max(2, miss_pct_turns):.1f}%"></div></div>
+            <span class="bar-pct">{miss_pct_turns:.0f}%</span>
+          </div>
+          <div class="bar-row">
+            <span class="bar-label">Cost</span>
+            <div class="bar-track"><div class="bar-fill hot" style="width:{max(2, miss_pct_cost):.1f}%"></div></div>
+            <span class="bar-pct">{miss_pct_cost:.0f}%</span>
+          </div>
+        </div>
+        <div class="miss-stats">
+          {t["rebuild_turns"]} misses &middot; ${t["rebuild_cost"]:.0f} total &middot;
+          <strong>{t["rebuild_multiplier"]:.0f}&times;</strong> normal turn cost
+        </div>
+        <p class="card-text">
+          When you step away for 5+ minutes during a session, the prompt cache expires.
+          Coming back means rebuilding it from scratch &mdash; and the bigger the session,
+          the more expensive the reload.
+        </p>"""
+
+    # ── Idle gap card ────────────────────────────────────────────────────
+    total_gaps = len(t["gaps_5_60"]) + len(t["gaps_over_1h"])
+    total_gap_cost = (sum(g["cost"] for g in t["gaps_5_60"])
+                      + sum(g["cost"] for g in t["gaps_over_1h"]))
+
+    if total_gaps == 0:
+        gap_card = """
+        <div class="good">
+          <div class="good-icon">&check;</div>
+          <div class="good-text">Your work rhythm is cache-friendly. No expensive idle gaps detected.</div>
+        </div>"""
+    else:
+        gap_hero = f"""
+        <div class="hero-single">
+          <span class="hero-num">{total_gaps}</span>
+          <span class="hero-desc">idle break{"s" if total_gaps != 1 else ""} cost you <strong>${total_gap_cost:.0f}</strong></span>
+        </div>"""
+
+        gap_buckets = ""
+        if t["gaps_5_60"]:
+            cost_5_60 = sum(g["cost"] for g in t["gaps_5_60"])
+            gap_buckets += f"""
+            <div class="gap-bucket">
+              <div class="gap-count">{len(t["gaps_5_60"])}</div>
+              <div class="gap-detail">
+                <div class="gap-range">break{"s" if len(t["gaps_5_60"]) != 1 else ""} between 5&ndash;60 min &mdash; ${cost_5_60:.0f}</div>
+                <div class="gap-fix">Fix: Switch to 1-hour cache TTL. These breaks won&rsquo;t expire the cache.</div>
+              </div>
+            </div>"""
+        if t["gaps_over_1h"]:
+            cost_1h = sum(g["cost"] for g in t["gaps_over_1h"])
+            gap_buckets += f"""
+            <div class="gap-bucket">
+              <div class="gap-count">{len(t["gaps_over_1h"])}</div>
+              <div class="gap-detail">
+                <div class="gap-range">break{"s" if len(t["gaps_over_1h"]) != 1 else ""} over 1 hour &mdash; ${cost_1h:.0f}</div>
+                <div class="gap-fix">Fix: <code>/clear</code> before stepping away. Fresh start is cheaper than reloading.</div>
+              </div>
+            </div>"""
+
+        gap_card = f"""{gap_hero}
+        <div class="gap-buckets">{gap_buckets}</div>"""
+
+    # ── Session size card ────────────────────────────────────────────────
+    buckets = [
+        ("&lt; 100K", t["size_small"]),
+        ("100&ndash;200K", t["size_medium"]),
+        ("&gt; 200K", t["size_large"]),
+    ]
+    nonempty = [(label, b) for label, b in buckets if b["count"] > 0]
+
+    if t["size_multiplier"] > 1.5 and len(nonempty) > 1:
+        size_hero = f"""
+        <div class="hero-single">
+          <span class="hero-num">{t["size_multiplier"]:.1f}&times;</span>
+          <span class="hero-desc">more expensive per turn in your largest sessions</span>
+        </div>"""
+    else:
+        size_hero = """
+        <div class="hero-single">
+          <span class="hero-desc" style="font-size:18px;color:#c9d1d9">Cost per turn by session size</span>
+        </div>"""
+
+    max_cpt = max((b["avg_cpt"] for _, b in nonempty), default=0.01)
+    size_bars = ""
+    for label, b in buckets:
+        if b["count"] == 0:
+            continue
+        pct = (b["avg_cpt"] / max_cpt) * 100 if max_cpt > 0 else 0
+        size_bars += f"""
+        <div class="size-row">
+          <span class="size-label">{label}</span>
+          <div class="size-track"><div class="size-fill" style="width:{pct:.0f}%"></div></div>
+          <span class="size-value">${b["avg_cpt"]:.2f}/turn</span>
+          <span class="size-count">{b["count"]} session{"s" if b["count"] != 1 else ""}</span>
+        </div>"""
+
+    size_card = f"""{size_hero}
+    <div class="size-bars">{size_bars}</div>
+    <p class="card-text">
+      Every turn re-reads your full conversation context. Bigger context = higher per-turn cost.
+      Use <code>/clear</code> at natural breakpoints to keep sessions lean.
+    </p>"""
+
+    # ── Recommendation card ──────────────────────────────────────────────
+    recs = r.get("recommendations", [])
+    if recs:
+        top_rec = recs[0]
+        sav = f"~${top_rec['savings_monthly']:.0f}/mo" if top_rec.get("savings_monthly") else ""
+        setting_html = top_rec["setting"].replace("\n", "<br>").replace("  ", "&nbsp;&nbsp;")
+        rec_card = f"""
+        <div class="rec-priority">#1 PRIORITY{f" &middot; saves {sav}" if sav else ""}</div>
+        <h3 class="rec-title">{top_rec["title"]}</h3>
+        <p class="rec-detail">{top_rec["detail"]}</p>
+        <div class="setting-block">
+          <code>{setting_html}</code>
+          <button class="copy-btn" onclick="copyCmd(this)">Copy</button>
+        </div>"""
+        if len(recs) > 1:
+            also_items = ""
+            for rec in recs[1:]:
+                also_sav = f" (~${rec['savings_monthly']:.0f}/mo)" if rec.get("savings_monthly") else ""
+                also_items += f'<li><strong>{rec["title"]}</strong>{also_sav}</li>'
+            rec_card += f"""
+        <div class="also-consider">
+          <div class="also-label">Also consider</div>
+          <ul>{also_items}</ul>
+        </div>"""
+    else:
+        rec_card = """
+        <div class="good">
+          <div class="good-icon">&check;</div>
+          <div class="good-text">
+            Your settings match your usage patterns. No changes needed &mdash; keep doing what you&rsquo;re doing.
+          </div>
+        </div>"""
+
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Claude Usage Report &mdash; {start_str} &ndash; {end_str}</title>
+<style>
+  *, *::before, *::after {{ box-sizing: border-box; }}
+  body {{
+    margin: 0; padding: 0;
+    background: #0d1117; color: #e6edf3;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    font-size: 15px; line-height: 1.6;
+  }}
+  .container {{
+    max-width: 700px; margin: 0 auto;
+    padding: 48px 24px 80px;
+  }}
+  header {{
+    text-align: center; margin-bottom: 48px;
+    padding-bottom: 32px; border-bottom: 1px solid #21262d;
+  }}
+  header h1 {{
+    font-size: 28px; font-weight: 700; color: #f0f6fc;
+    margin: 0 0 8px;
+  }}
+  .period {{ font-size: 16px; color: #8b949e; margin-bottom: 4px; }}
+  .summary-line {{ font-size: 14px; color: #656d76; }}
+
+  /* Cards */
+  .card {{
+    background: #161b22; border: 1px solid #30363d;
+    border-radius: 12px; padding: 32px;
+    margin-bottom: 24px; border-left: 4px solid #30363d;
+  }}
+  .card.miss {{ border-left-color: #f85149; }}
+  .card.gaps {{ border-left-color: #d29922; }}
+  .card.size {{ border-left-color: #58a6ff; }}
+  .card.rec {{ border-left-color: #3fb950; }}
+  .card-label {{
+    font-size: 12px; font-weight: 600;
+    text-transform: uppercase; letter-spacing: 2px;
+    color: #8b949e; margin-bottom: 20px;
+  }}
+  .card-text {{
+    font-size: 14px; color: #9ca3af; line-height: 1.7; margin: 16px 0 0;
+  }}
+  .card-text code {{
+    background: #21262d; padding: 2px 6px; border-radius: 4px;
+    font-size: 13px; color: #79c0ff;
+  }}
+
+  /* Good state */
+  .good {{
+    display: flex; align-items: center; gap: 16px; padding: 8px 0;
+  }}
+  .good-icon {{
+    font-size: 28px; color: #3fb950; font-weight: 700;
+    min-width: 36px; text-align: center;
+  }}
+  .good-text {{ font-size: 15px; color: #9ca3af; }}
+
+  /* Hero pair (cache miss) */
+  .hero-pair {{
+    display: flex; align-items: center; justify-content: center;
+    gap: 24px; margin-bottom: 24px;
+  }}
+  .hero-item {{ text-align: center; }}
+  .hero-num {{
+    font-size: 48px; font-weight: 800; color: #f0f6fc; line-height: 1;
+  }}
+  .hero-num.accent-red {{ color: #f85149; }}
+  .hero-desc {{ font-size: 14px; color: #8b949e; margin-top: 4px; }}
+  .hero-arrow {{ font-size: 28px; color: #484f58; margin-top: -20px; }}
+
+  /* Bar comparison */
+  .bar-compare {{ margin: 20px 0; }}
+  .bar-row {{
+    display: grid; grid-template-columns: 50px 1fr 44px;
+    align-items: center; gap: 12px; margin-bottom: 8px;
+  }}
+  .bar-label {{ font-size: 13px; color: #8b949e; text-align: right; }}
+  .bar-track {{
+    height: 24px; background: #21262d; border-radius: 6px; overflow: hidden;
+  }}
+  .bar-fill {{
+    height: 100%; border-radius: 6px; min-width: 4px;
+    animation: grow 0.8s cubic-bezier(.4,0,.2,1) forwards;
+  }}
+  .bar-fill.neutral {{ background: #484f58; }}
+  .bar-fill.hot {{ background: #f85149; }}
+  @keyframes grow {{ from {{ width: 0; }} }}
+  .bar-pct {{ font-size: 14px; color: #e6edf3; font-weight: 600; }}
+  .miss-stats {{
+    font-size: 15px; color: #c9d1d9; text-align: center; margin: 16px 0;
+  }}
+  .miss-stats strong {{ color: #f85149; }}
+
+  /* Hero single */
+  .hero-single {{ margin-bottom: 20px; }}
+  .hero-single .hero-num {{
+    font-size: 48px; font-weight: 800; color: #f0f6fc;
+    line-height: 1; display: inline;
+  }}
+  .hero-single .hero-desc {{
+    font-size: 20px; color: #9ca3af; display: inline; margin-left: 12px;
+  }}
+  .hero-single .hero-desc strong {{ color: #f0f6fc; }}
+
+  /* Gap buckets */
+  .gap-buckets {{ margin: 16px 0; }}
+  .gap-bucket {{
+    display: flex; gap: 16px; align-items: flex-start;
+    padding: 16px 0; border-bottom: 1px solid #21262d;
+  }}
+  .gap-bucket:last-child {{ border-bottom: none; }}
+  .gap-count {{
+    font-size: 28px; font-weight: 800; color: #f0f6fc;
+    min-width: 48px; text-align: center; line-height: 1; padding-top: 2px;
+  }}
+  .gap-detail {{ flex: 1; }}
+  .gap-range {{ font-size: 15px; color: #c9d1d9; margin-bottom: 4px; }}
+  .gap-fix {{ font-size: 14px; color: #3fb950; font-weight: 500; }}
+  .gap-fix code {{
+    background: #21262d; padding: 2px 6px; border-radius: 4px;
+    font-size: 13px; color: #79c0ff;
+  }}
+
+  /* Size bars */
+  .size-bars {{ margin: 16px 0; }}
+  .size-row {{
+    display: grid; grid-template-columns: 80px 1fr 90px 80px;
+    align-items: center; gap: 12px; margin-bottom: 8px;
+  }}
+  .size-label {{ font-size: 13px; color: #8b949e; text-align: right; }}
+  .size-track {{
+    height: 20px; background: #21262d; border-radius: 5px; overflow: hidden;
+  }}
+  .size-fill {{
+    height: 100%; background: #58a6ff; border-radius: 5px; min-width: 4px;
+    animation: grow 0.8s cubic-bezier(.4,0,.2,1) forwards;
+  }}
+  .size-value {{ font-size: 14px; color: #e6edf3; font-weight: 600; }}
+  .size-count {{ font-size: 13px; color: #656d76; }}
+
+  /* Recommendation */
+  .rec-priority {{
+    font-size: 12px; font-weight: 700; color: #3fb950;
+    letter-spacing: 2px; margin-bottom: 8px;
+  }}
+  .rec-title {{
+    font-size: 22px; font-weight: 700; color: #f0f6fc; margin: 0 0 16px;
+  }}
+  .rec-detail {{
+    font-size: 14px; color: #9ca3af; line-height: 1.7; margin: 0 0 20px;
+  }}
+  .setting-block {{
+    background: #0d1117; border: 1px solid #30363d; border-radius: 8px;
+    padding: 16px 20px; position: relative;
+  }}
+  .setting-block code {{
+    color: #79c0ff; font-size: 13px; white-space: pre-wrap; line-height: 1.8;
+  }}
+  .copy-btn {{
+    position: absolute; top: 10px; right: 10px;
+    background: #21262d; border: 1px solid #30363d; color: #8b949e;
+    border-radius: 6px; padding: 4px 12px; font-size: 12px; cursor: pointer;
+  }}
+  .copy-btn:hover {{ color: #e6edf3; border-color: #58a6ff; }}
+  .also-consider {{
+    margin-top: 20px; padding-top: 16px; border-top: 1px solid #21262d;
+  }}
+  .also-label {{
+    font-size: 12px; font-weight: 600; color: #8b949e;
+    text-transform: uppercase; letter-spacing: 1px; margin-bottom: 8px;
+  }}
+  .also-consider ul {{ margin: 0; padding-left: 20px; }}
+  .also-consider li {{
+    font-size: 14px; color: #9ca3af; margin-bottom: 6px; line-height: 1.5;
+  }}
+  .also-consider li strong {{ color: #c9d1d9; }}
+
+  /* Explainer */
+  details {{ margin-top: 32px; }}
+  details summary {{
+    font-size: 14px; color: #8b949e; cursor: pointer; padding: 8px 0;
+  }}
+  details summary:hover {{ color: #c9d1d9; }}
+  .explainer {{
+    font-size: 14px; color: #656d76; line-height: 1.7; padding: 16px 0;
+  }}
+  .explainer p {{ margin: 0 0 12px; }}
+  .explainer strong {{ color: #8b949e; }}
+  .explainer code {{
+    background: #21262d; padding: 2px 6px; border-radius: 4px;
+    font-size: 13px; color: #79c0ff;
+  }}
+
+  .footer {{
+    text-align: center; color: #484f58; font-size: 13px;
+    margin-top: 40px; padding-top: 16px; border-top: 1px solid #21262d;
+  }}
+
+  @media (max-width: 640px) {{
+    .hero-num {{ font-size: 36px; }}
+    .hero-pair {{ gap: 16px; }}
+    .size-row {{ grid-template-columns: 70px 1fr 80px; }}
+    .size-count {{ display: none; }}
+  }}
+</style>
+</head>
+<body>
+<div class="container">
+  <header>
+    <h1>Your Claude Usage Report</h1>
+    <div class="period">{start_str} &ndash; {end_str}</div>
+    <div class="summary-line">${o["total_spend"]:.0f} total &middot; {o["session_count"]} sessions &middot; ${o["daily_avg"]:.0f}/day avg</div>
+  </header>
+
+  <div class="card miss">
+    <div class="card-label">Cache Miss Tax</div>
+    {miss_card}
+  </div>
+
+  <div class="card gaps">
+    <div class="card-label">Idle Gap Penalty</div>
+    {gap_card}
+  </div>
+
+  <div class="card size">
+    <div class="card-label">Session Size Impact</div>
+    {size_card}
+  </div>
+
+  <div class="card rec">
+    <div class="card-label">Recommendation</div>
+    {rec_card}
+  </div>
+
+  <details>
+    <summary>How does this work?</summary>
+    <div class="explainer">
+      <p><strong>Prompt caching:</strong> Claude Code caches your conversation context so it doesn&rsquo;t
+      need to re-process it every turn. This cache has a time-to-live (TTL) &mdash; 5 minutes by default,
+      or 1 hour if you enable extended caching.</p>
+      <p><strong>Cache miss:</strong> When the cache expires (you were idle too long), Claude has to
+      rebuild the entire cache from scratch. This is expensive &mdash; writing tokens to cache costs
+      12.5&times; more than reading from it.</p>
+      <p><strong>Why big sessions cost more:</strong> Every turn reads your full conversation context.
+      A session at 200K tokens reads 200K tokens per turn. At $0.50/MTok, that&rsquo;s $0.10 just
+      in cache reads &mdash; before any output.</p>
+      <p><strong>The 5-minute rule:</strong> If you&rsquo;re in a big session and need a break, either
+      switch to 1-hour TTL so the cache survives longer breaks, or run <code>/clear</code> before
+      stepping away so you don&rsquo;t pay to reload a huge context.</p>
+    </div>
+  </details>
+
+  <div class="footer">
+    Generated by Claude Code Usage Advisor &middot; {datetime.now().strftime("%Y-%m-%d %H:%M")}
+  </div>
+</div>
+
+<script>
 function copyCmd(btn) {{
   var code = btn.parentElement.querySelector('code');
   var text = code.textContent || code.innerText;
@@ -1264,7 +1667,8 @@ def main():
     )
     parser.add_argument("--since", help="Only include sessions after YYYY-MM-DD")
     parser.add_argument("--json", action="store_true", help="Output JSON report")
-    parser.add_argument("--html", action="store_true", help="Output self-contained HTML report")
+    parser.add_argument("--html", action="store_true", help="Output self-contained HTML report (slideshow)")
+    parser.add_argument("--team", action="store_true", help="Output team-friendly HTML insights report")
     args = parser.parse_args()
 
     files = find_session_files(args.path)
@@ -1309,6 +1713,9 @@ def main():
 
     if args.json:
         print(json.dumps(serialize_report(report), indent=2, default=str))
+    elif args.team:
+        team = compute_team_insights(sessions, costs_list)
+        print(generate_team_html(team, report))
     elif args.html:
         print(generate_html(report))
     else:
