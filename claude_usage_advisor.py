@@ -24,24 +24,13 @@ from datetime import datetime, timezone
 from collections import defaultdict
 
 # ── Pricing ($/MTok, April 2026) ────────────────────────────────────────────
-# Relative cost: Opus 4.7 ~2x Sonnet, Opus 4.6 ~1.67x Sonnet
+# Per-token prices are the same across Opus versions.
+# Opus 4.7's tokenizer produces ~30-35% more tokens → effective cost ~2x Sonnet.
+# Opus 4.6 tokenizer is more efficient → effective cost ~1.67x Sonnet.
+OPUS_47_TOKEN_INFLATION = 1.325  # midpoint of 30-35% more tokens
 
 PRICING = {
-    "opus-4-7": {
-        "base_input": 6.00,
-        "cache_write_5m": 7.50,
-        "cache_write_1h": 12.00,
-        "cache_read": 0.60,
-        "output": 30.00,
-    },
-    "opus-4-6": {
-        "base_input": 5.00,
-        "cache_write_5m": 6.25,
-        "cache_write_1h": 10.00,
-        "cache_read": 0.50,
-        "output": 25.00,
-    },
-    "opus-4-5": {
+    "opus": {
         "base_input": 5.00,
         "cache_write_5m": 6.25,
         "cache_write_1h": 10.00,
@@ -68,30 +57,17 @@ DEFAULT_TIER = "sonnet"
 
 
 def model_tier(model_str):
-    """Return pricing tier key. Distinguishes Opus versions."""
+    """Return pricing tier key."""
     if not model_str:
         return DEFAULT_TIER
     m = model_str.lower()
-    if "opus-4-7" in m or "opus-4.7" in m:
-        return "opus-4-7"
-    if "opus-4-6" in m or "opus-4.6" in m:
-        return "opus-4-6"
-    if "opus-4-5" in m or "opus-4.5" in m:
-        return "opus-4-5"
     if "opus" in m:
-        return "opus-4-6"
+        return "opus"
     if "sonnet" in m:
         return "sonnet"
     if "haiku" in m:
         return "haiku"
     return DEFAULT_TIER
-
-
-def tier_family(tier):
-    """Return 'opus', 'sonnet', or 'haiku' for display grouping."""
-    if tier.startswith("opus"):
-        return "opus"
-    return tier
 
 
 def opus_version(model_str):
@@ -244,34 +220,18 @@ def compute_session_costs(session):
         totals["cache_write_5m_tokens"] += t["cache_write_5m"]
         totals["cache_write_1h_tokens"] += t["cache_write_1h"]
 
-        family = tier_family(tier)
-        by_tier[family]["cost"] = by_tier[family].get("cost", 0) + actual
-        by_tier[family]["output_cost"] = by_tier[family].get("output_cost", 0) + out_c
-        by_tier[family]["turns"] = by_tier[family].get("turns", 0) + 1
+        by_tier[tier]["cost"] = by_tier[tier].get("cost", 0) + actual
+        by_tier[tier]["output_cost"] = by_tier[tier].get("output_cost", 0) + out_c
+        by_tier[tier]["turns"] = by_tier[tier].get("turns", 0) + 1
 
-        # Track Opus version and context excess for 4.7 → 4.6 recommendation
+        # Track Opus 4.7 tokenizer cost for version recommendation
         ov = opus_version(t["model"])
         if ov == "4.7":
             by_tier["opus"]["turns_4_7"] = by_tier["opus"].get("turns_4_7", 0) + 1
+            by_tier["opus"]["cost_4_7"] = by_tier["opus"].get("cost_4_7", 0) + actual
             context = t["cache_read_tokens"] + t["cache_write_tokens"] + t["input_tokens"]
             by_tier["opus"]["peak_context"] = max(by_tier["opus"].get("peak_context", 0), context)
-
-            # Per-token savings: what this turn would cost on 4.6 pricing
-            r46 = PRICING["opus-4-6"]
-            cost_4_7 = actual
-            cost_4_6 = (
-                (t["output_tokens"] / mtok) * r46["output"]
-                + (t["cache_read_tokens"] / mtok) * r46["cache_read"]
-                + (t["cache_write_5m"] / mtok) * r46["cache_write_5m"]
-                + (t["cache_write_1h"] / mtok) * r46["cache_write_1h"]
-                + (t["input_tokens"] / mtok) * r46["base_input"]
-            )
-            by_tier["opus"]["price_diff_4_7"] = by_tier["opus"].get("price_diff_4_7", 0) + (cost_4_7 - cost_4_6)
-
             if context > 200_000:
-                excess = context - 200_000
-                excess_read_cost = (excess / mtok) * r["cache_read"]
-                by_tier["opus"]["excess_4_7_cost"] = by_tier["opus"].get("excess_4_7_cost", 0) + excess_read_cost
                 by_tier["opus"]["turns_over_200k"] = by_tier["opus"].get("turns_over_200k", 0) + 1
         elif ov:
             by_tier["opus"]["turns_4_6"] = by_tier["opus"].get("turns_4_6", 0) + 1
@@ -362,21 +322,21 @@ def run_analysis(sessions, costs_list):
             tier_output[tier] += data.get("output_cost", 0)
             tier_turns[tier] += int(data.get("turns", 0))
 
-    # Opus 4.7 → 4.6 analysis
-    total_excess_4_7_cost = 0.0
-    total_price_diff_4_7 = 0.0
+    # Opus 4.7 → 4.6 analysis (tokenizer efficiency)
+    total_cost_4_7 = 0.0
     total_turns_4_7 = 0
     total_turns_4_6_compat = 0
     total_turns_over_200k = 0
     peak_context_all = 0
     for c in costs_list:
         od = c["by_tier"].get("opus", {})
-        total_excess_4_7_cost += od.get("excess_4_7_cost", 0)
-        total_price_diff_4_7 += od.get("price_diff_4_7", 0)
+        total_cost_4_7 += od.get("cost_4_7", 0)
         total_turns_4_7 += int(od.get("turns_4_7", 0))
         total_turns_4_6_compat += int(od.get("turns_4_6", 0))
         total_turns_over_200k += int(od.get("turns_over_200k", 0))
         peak_context_all = max(peak_context_all, od.get("peak_context", 0))
+    # 4.6 tokenizer would produce fewer tokens → same work costs less
+    tokenizer_savings = total_cost_4_7 * (1 - 1 / OPUS_47_TOKEN_INFLATION)
 
     # Cache analysis
     total_rebuilds = sum(c["rebuilds"] for c in costs_list)
@@ -462,40 +422,32 @@ def run_analysis(sessions, costs_list):
                 ),
             })
 
-    # Rec 2: Opus 4.7 → 4.6 (same family, ~17% cheaper per token, 200K context cap)
-    total_4_7_savings = total_price_diff_4_7 + total_excess_4_7_cost
-    if total_turns_4_7 > 0 and total_4_7_savings > 5:
-        monthly_4_6 = (total_4_7_savings / days) * 30
+    # Rec 2: Opus 4.7 → 4.6 (same prices, but 4.6 tokenizer is ~25% more efficient)
+    if total_turns_4_7 > 0 and tokenizer_savings > 5:
+        monthly_4_6 = (tokenizer_savings / days) * 30
         peak_str = fmt_tokens(peak_context_all) if peak_context_all else "?"
-        pct_cheaper = (total_price_diff_4_7 / max(0.01, total_price_diff_4_7 + sum(
-            c["by_tier"].get("opus", {}).get("cost", 0) for c in costs_list
-            if c["by_tier"].get("opus", {}).get("turns_4_7", 0) > 0
-        ))) * 100 if total_price_diff_4_7 > 0 else 0
+        pct_saving = (1 - 1 / OPUS_47_TOKEN_INFLATION) * 100
 
-        detail_parts = [
-            f"You have {total_turns_4_7} turns on Opus 4.7. "
-            f"Opus 4.6 is the same model family at ~1.67x Sonnet cost "
-            f"vs 4.7's ~2x — about 17% cheaper per token."
-        ]
-        if total_price_diff_4_7 > 0:
-            detail_parts.append(
-                f"Per-token savings alone: ${total_price_diff_4_7:.2f} over {days} days."
-            )
-        if total_turns_over_200k > 0:
-            detail_parts.append(
-                f"Plus {total_turns_over_200k} turns exceeded 200K context "
-                f"(peak: {peak_str}) — 4.6's smaller window forces earlier "
-                f"compaction, saving an additional ${total_excess_4_7_cost:.2f}."
-            )
-        detail_parts.append(
-            f"Total estimated savings: ${total_4_7_savings:.2f} over {days} days."
+        detail = (
+            f"You have {total_turns_4_7} turns on Opus 4.7, costing "
+            f"${total_cost_4_7:.2f} over {days} days. Opus 4.7's tokenizer "
+            f"produces ~30-35% more tokens than 4.6 for the same content — "
+            f"same per-token price, but more tokens per turn. Switching to "
+            f"4.6 would reduce token counts by ~{pct_saving:.0f}%, saving an "
+            f"estimated ${tokenizer_savings:.2f} over this period."
         )
+        if total_turns_over_200k > 0:
+            detail += (
+                f" Additionally, {total_turns_over_200k} turns exceeded 200K "
+                f"context (peak: {peak_str}) — 4.6's smaller context window "
+                f"forces earlier compaction, compounding the savings."
+            )
 
         recommendations.append({
             "id": "opus_4_6",
             "title": "Switch from Opus 4.7 to 4.6",
             "savings_monthly": monthly_4_6,
-            "detail": " ".join(detail_parts),
+            "detail": detail,
             "setting": (
                 'Set your model version:\n'
                 '  claude --model claude-opus-4-6\n'
@@ -594,9 +546,8 @@ def run_analysis(sessions, costs_list):
             "turns_4_6": total_turns_4_6_compat,
             "turns_over_200k": total_turns_over_200k,
             "peak_context": peak_context_all,
-            "excess_cost": total_excess_4_7_cost,
-            "price_diff": total_price_diff_4_7,
-            "total_savings": total_4_7_savings,
+            "cost_4_7": total_cost_4_7,
+            "tokenizer_savings": tokenizer_savings,
         },
         "top_driver": top_driver,
         "cost_insight": cost_insight,
@@ -746,26 +697,23 @@ def _rec_visual(rec, report):
     rid = rec["id"]
     if rid == "opus_4_6":
         ov = report.get("opus_versions", {})
-        price_diff = ov.get("price_diff", 0)
-        excess = ov.get("excess_cost", 0)
         turns_4_7 = ov.get("turns_4_7", 0)
         turns_over = ov.get("turns_over_200k", 0)
-        peak = ov.get("peak_context", 0)
-        peak_k = peak // 1000 if peak else 0
+        pct_46 = int(100 / OPUS_47_TOKEN_INFLATION)
 
         return f"""
         <div class="visual comparison">
           <div class="comp-row">
-            <div class="comp-label">Opus 4.7 (~2x)</div>
+            <div class="comp-label">Opus 4.7 tokens</div>
             <div class="comp-track"><div class="comp-fill" style="width:100%;background:#bc8cff"></div></div>
-            <div class="comp-value">$30/MTok</div>
+            <div class="comp-value">~135</div>
           </div>
           <div class="comp-row">
-            <div class="comp-label">Opus 4.6 (~1.67x)</div>
-            <div class="comp-track"><div class="comp-fill" style="width:83%;background:#79c0ff"></div></div>
-            <div class="comp-value">$25/MTok</div>
+            <div class="comp-label">Opus 4.6 tokens</div>
+            <div class="comp-track"><div class="comp-fill" style="width:{pct_46}%;background:#79c0ff"></div></div>
+            <div class="comp-value">~100</div>
           </div>
-          <div class="comp-diff">{turns_4_7} turns &middot; 17% cheaper per token{f" &middot; {turns_over} turns over 200K" if turns_over > 0 else ""}</div>
+          <div class="comp-diff">same content, ~25% fewer tokens on 4.6{f" &middot; {turns_over} turns over 200K" if turns_over > 0 else ""}</div>
         </div>"""
     elif rid == "cache_ttl_1h":
         n = report["cache"]["avoidable_misses"]

@@ -2,9 +2,9 @@
 
 ## Pricing Model
 
-Relative cost tiers (use these for all advisor calculations and recommendations):
-- **Opus 4.7**: ~2x Sonnet cost
-- **Opus 4.6**: ~1.67x Sonnet cost
+Per-token prices are the same for all Opus versions. The effective cost difference comes from the tokenizer:
+- **Opus 4.7**: same $/MTok as 4.6, but its tokenizer produces **~30-35% more tokens** for the same content → effective cost **~2x Sonnet**
+- **Opus 4.6**: baseline Opus pricing → effective cost **~1.67x Sonnet**
 - **Sonnet**: baseline
 
 ## Recommendation Rules
