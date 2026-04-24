@@ -106,6 +106,8 @@ def parse_session(filepath):
     turns = []
     models_seen = set()
     first_ts = last_ts = None
+    mcp_tool_calls = 0
+    mcp_servers_seen = set()
 
     with open(filepath, "r", encoding="utf-8", errors="replace") as f:
         for line in f:
@@ -149,6 +151,17 @@ def parse_session(filepath):
                 "cache_write_1h": cc.get("ephemeral_1h_input_tokens", 0),
             })
 
+            content = msg.get("content", [])
+            if isinstance(content, list):
+                for block in content:
+                    if isinstance(block, dict) and block.get("type") == "tool_use":
+                        name = block.get("name", "")
+                        if name.startswith("mcp__"):
+                            mcp_tool_calls += 1
+                            parts = name.split("__")
+                            if len(parts) > 1:
+                                mcp_servers_seen.add(parts[1])
+
     if not turns:
         return None
     duration = (last_ts - first_ts).total_seconds() / 60 if first_ts and last_ts else 0
@@ -160,6 +173,8 @@ def parse_session(filepath):
         "first_ts": first_ts,
         "last_ts": last_ts,
         "duration_min": duration,
+        "mcp_tool_calls": mcp_tool_calls,
+        "mcp_servers": mcp_servers_seen,
     }
 
 
@@ -587,6 +602,21 @@ def compute_team_insights(sessions, costs_list):
     baseline = small_cpt or medium_cpt or 0.001
     size_mult = large_cpt / baseline if large_cpt and baseline > 0.001 else 0
 
+    # MCP overhead analysis
+    total_mcp_calls = sum(s.get("mcp_tool_calls", 0) for s in sessions)
+    sessions_with_mcp = sum(1 for s in sessions if s.get("mcp_tool_calls", 0) > 0)
+    all_mcp_servers = set()
+    for s in sessions:
+        all_mcp_servers.update(s.get("mcp_servers", set()))
+    # ~40 tokens per deferred tool name/desc, ~10 tools per server, ~300 tokens per server instruction block
+    estimated_tool_tokens = len(all_mcp_servers) * 10 * 40 + len(all_mcp_servers) * 300
+    tool_def_per_turn = estimated_tool_tokens / 1_000_000 * 0.50
+    tool_def_total = tool_def_per_turn * total_turns
+    tool_def_pct = (tool_def_total / max(0.001, total_cost)) * 100
+
+    total_output_cost = sum(c["output_cost"] for c in costs_list)
+    output_pct = (total_output_cost / max(0.001, total_cost)) * 100
+
     return {
         "total_turns": total_turns,
         "total_cost": total_cost,
@@ -603,6 +633,11 @@ def compute_team_insights(sessions, costs_list):
         "size_medium": {"count": len(medium), "avg_cpt": medium_cpt},
         "size_large": {"count": len(large), "avg_cpt": large_cpt},
         "size_multiplier": size_mult,
+        "mcp_tool_calls": total_mcp_calls,
+        "mcp_sessions": sessions_with_mcp,
+        "mcp_server_count": len(all_mcp_servers),
+        "tool_def_pct": tool_def_pct,
+        "output_pct": output_pct,
     }
 
 
@@ -1220,7 +1255,7 @@ def generate_team_html(team, report):
           <div class="hero-arrow">&rarr;</div>
           <div class="hero-item">
             <div class="hero-num accent-red">{miss_pct_cost:.0f}%</div>
-            <div class="hero-desc">of your budget</div>
+            <div class="hero-desc">of your spend</div>
           </div>
         </div>
         <div class="bar-compare">
@@ -1377,6 +1412,47 @@ def generate_team_html(team, report):
           </div>
         </div>"""
 
+    # ── Not costing you card ────────────────────────────────────────────
+    nc_items_html = ""
+    if t.get("mcp_server_count", 0) > 0:
+        mcp_s = "s" if t["mcp_server_count"] != 1 else ""
+        nc_items_html += f"""
+        <div class="nc-item">
+          <div class="nc-header">
+            <span class="nc-title">MCP servers &amp; tool calls</span>
+            <span class="nc-stat">~{t["tool_def_pct"]:.0f}% of spend</span>
+          </div>
+          <div class="nc-detail">
+            {t["mcp_server_count"]} configured MCP server{mcp_s}
+            with {t["mcp_tool_calls"]} tool calls across {t["mcp_sessions"]} sessions.
+            Tool definitions add ~{t["tool_def_pct"]:.0f}% overhead to your system prompt costs.
+            The rest of your context is the work itself.
+          </div>
+        </div>"""
+
+    output_pct = t.get("output_pct", 0)
+    if output_pct < 20:
+        nc_items_html += f"""
+        <div class="nc-item">
+          <div class="nc-header">
+            <span class="nc-title">Output tokens</span>
+            <span class="nc-stat">~{output_pct:.0f}% of spend</span>
+          </div>
+          <div class="nc-detail">
+            Despite being the most expensive token type at $25/MTok, Claude&rsquo;s responses
+            are a small fraction of your bill. The bulk goes to reading and caching
+            your conversation context.
+          </div>
+        </div>"""
+
+    nc_card_html = ""
+    if nc_items_html:
+        nc_card_html = f"""
+  <div class="card calm">
+    <div class="card-label">What&rsquo;s Not Inflating Your Costs</div>
+    {nc_items_html}
+  </div>"""
+
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -1416,6 +1492,19 @@ def generate_team_html(team, report):
   .card.gaps {{ border-left-color: #d29922; }}
   .card.size {{ border-left-color: #58a6ff; }}
   .card.rec {{ border-left-color: #3fb950; }}
+  .card.calm {{ border-left-color: #484f58; }}
+  .nc-item {{
+    padding: 14px 0;
+    border-bottom: 1px solid #21262d;
+  }}
+  .nc-item:last-child {{ border-bottom: none; }}
+  .nc-header {{
+    display: flex; justify-content: space-between;
+    align-items: baseline; margin-bottom: 4px;
+  }}
+  .nc-title {{ font-size: 15px; font-weight: 600; color: #c9d1d9; }}
+  .nc-stat {{ font-size: 15px; font-weight: 700; color: #3fb950; }}
+  .nc-detail {{ font-size: 14px; color: #8b949e; line-height: 1.6; }}
   .card-label {{
     font-size: 12px; font-weight: 600;
     text-transform: uppercase; letter-spacing: 2px;
@@ -1621,6 +1710,8 @@ def generate_team_html(team, report):
     <div class="card-label">Recommendation</div>
     {rec_card}
   </div>
+
+  {nc_card_html}
 
   <details>
     <summary>How does this work?</summary>

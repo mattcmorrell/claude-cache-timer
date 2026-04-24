@@ -37,6 +37,19 @@
   .card.gaps { border-left-color: #d29922; }
   .card.size { border-left-color: #58a6ff; }
   .card.rec { border-left-color: #3fb950; }
+  .card.calm { border-left-color: #484f58; }
+  .nc-item {
+    padding: 14px 0;
+    border-bottom: 1px solid #21262d;
+  }
+  .nc-item:last-child { border-bottom: none; }
+  .nc-header {
+    display: flex; justify-content: space-between;
+    align-items: baseline; margin-bottom: 4px;
+  }
+  .nc-title { font-size: 15px; font-weight: 600; color: #c9d1d9; }
+  .nc-stat { font-size: 15px; font-weight: 700; color: #3fb950; }
+  .nc-detail { font-size: 14px; color: #8b949e; line-height: 1.6; }
   .card-label {
     font-size: 12px; font-weight: 600;
     text-transform: uppercase; letter-spacing: 2px;
@@ -234,7 +247,7 @@
           <div class="hero-arrow">&rarr;</div>
           <div class="hero-item">
             <div class="hero-num accent-red">15%</div>
-            <div class="hero-desc">of your budget</div>
+            <div class="hero-desc">of your spend</div>
           </div>
         </div>
         <div class="bar-compare">
@@ -325,6 +338,33 @@
             Your settings match your usage patterns. No changes needed &mdash; keep doing what you&rsquo;re doing.
           </div>
         </div>
+  </div>
+
+  <div class="card calm">
+    <div class="card-label">What's Not Inflating Your Costs</div>
+    <div class="nc-item">
+      <div class="nc-header">
+        <span class="nc-title">MCP servers &amp; tool calls</span>
+        <span class="nc-stat">~2% of spend</span>
+      </div>
+      <div class="nc-detail">
+        6 configured MCP servers (Playwright, Figma, etc.) with 784 tool calls across 34 sessions.
+        Tool definitions add ~2% overhead to your system prompt costs. Tool results
+        account for just 6% of context growth &mdash; the other 94% is normal work
+        like reading files and running commands.
+      </div>
+    </div>
+    <div class="nc-item">
+      <div class="nc-header">
+        <span class="nc-title">Output tokens</span>
+        <span class="nc-stat">~6% of spend</span>
+      </div>
+      <div class="nc-detail">
+        Despite being the most expensive token type at $25/MTok, Claude&rsquo;s responses
+        are a small fraction of your bill. The bulk goes to reading and caching
+        your conversation context.
+      </div>
+    </div>
   </div>
 
   <details>
