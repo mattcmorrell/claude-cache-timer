@@ -1,0 +1,412 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Cost Breakdown — Top 15 Sessions</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: 'SF Mono', 'Cascadia Code', 'Fira Code', monospace;
+    background: #0d1117;
+    color: #c9d1d9;
+    padding: 32px;
+    line-height: 1.5;
+  }
+  h1 { font-size: 22px; color: #e6edf3; margin-bottom: 4px; }
+  .subtitle { font-size: 14px; color: #8b949e; margin-bottom: 24px; }
+
+  .chart-container {
+    background: #161b22;
+    border: 1px solid #30363d;
+    border-radius: 8px;
+    padding: 24px;
+    margin-bottom: 24px;
+  }
+  .chart-title {
+    font-size: 13px;
+    color: #8b949e;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-bottom: 16px;
+  }
+
+  canvas { display: block; }
+
+  .stats-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 16px;
+    margin-bottom: 24px;
+  }
+  .stat-card {
+    background: #161b22;
+    border: 1px solid #30363d;
+    border-radius: 8px;
+    padding: 16px 20px;
+  }
+  .stat-label {
+    font-size: 12px;
+    color: #8b949e;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-bottom: 4px;
+  }
+  .stat-value {
+    font-size: 28px;
+    font-weight: 700;
+    color: #e6edf3;
+  }
+  .stat-detail {
+    font-size: 13px;
+    color: #8b949e;
+    margin-top: 4px;
+  }
+
+  .tooltip-box {
+    display: none;
+    position: fixed;
+    background: #30363d;
+    border: 1px solid #484f58;
+    border-radius: 6px;
+    padding: 10px 14px;
+    font-size: 12px;
+    color: #e6edf3;
+    pointer-events: none;
+    z-index: 100;
+    line-height: 1.6;
+  }
+
+  .donut-legend {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .donut-legend-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 14px;
+  }
+  .donut-swatch {
+    width: 14px;
+    height: 14px;
+    border-radius: 3px;
+    flex-shrink: 0;
+  }
+  .donut-legend-pct {
+    color: #e6edf3;
+    font-weight: 600;
+    min-width: 48px;
+    text-align: right;
+  }
+  .donut-legend-val {
+    color: #8b949e;
+    min-width: 60px;
+    text-align: right;
+  }
+  .donut-legend-label {
+    color: #c9d1d9;
+  }
+
+  .row { display: flex; gap: 24px; }
+  .row > * { flex: 1; }
+
+  .insight-box {
+    background: #0d1117;
+    border: 1px solid #30363d;
+    border-radius: 6px;
+    padding: 16px 20px;
+    margin-top: 16px;
+    font-size: 14px;
+    color: #c9d1d9;
+    line-height: 1.6;
+  }
+  .insight-box strong { color: #e6edf3; }
+</style>
+</head>
+<body>
+
+<h1>Cost Breakdown</h1>
+<p class="subtitle">Where your money goes — top 15 most expensive sessions, Mar 25 – Apr 22, 2026</p>
+
+<div class="stats-grid">
+  <div class="stat-card">
+    <div class="stat-label">Total Spend</div>
+    <div class="stat-value">$696</div>
+    <div class="stat-detail">across 11 sessions, 5,512 turns</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-label">Cache Miss Tax</div>
+    <div class="stat-value" style="color: #f85149">$138</div>
+    <div class="stat-detail">20% of total spend from 120 miss turns (2.2% of turns)</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-label">Avg Miss Turn Cost</div>
+    <div class="stat-value" style="color: #ffa657">$1.15</div>
+    <div class="stat-detail">vs $0.10 avg normal turn (11x more expensive)</div>
+  </div>
+</div>
+
+<div class="row">
+  <div class="chart-container">
+    <div class="chart-title">Cost by Category</div>
+    <div style="display:flex; align-items:center; gap: 32px;">
+      <canvas id="donut" width="220" height="220"></canvas>
+      <div class="donut-legend" id="donutLegend"></div>
+    </div>
+  </div>
+  <div class="chart-container">
+    <div class="chart-title">Cache Miss Turns vs Normal Turns</div>
+    <div style="display:flex; align-items:center; gap: 32px;">
+      <canvas id="missDonut" width="220" height="220"></canvas>
+      <div class="donut-legend" id="missLegend"></div>
+    </div>
+  </div>
+</div>
+
+<div class="chart-container">
+  <div class="chart-title">Per-Session Cost Breakdown</div>
+  <canvas id="stackedBar" width="1100" height="400"></canvas>
+  <div class="insight-box" id="barInsight"></div>
+</div>
+
+<div class="chart-container">
+  <div class="chart-title">Cache Miss Impact by Session</div>
+  <canvas id="missBar" width="1100" height="350"></canvas>
+</div>
+
+<div class="tooltip-box" id="tooltip"></div>
+
+<script>
+const DATA = [{"date":"Apr 03","turns":868,"total":200.63,"output":5.73,"cache_read":132.41,"cache_write_5m":27.41,"cache_write_1h":35.07,"uncached_input":0.01,"miss_cost":54.48,"miss_turns":22,"normal_cost":146.14,"normal_turns":846},{"date":"Mar 25","turns":1019,"total":171.88,"output":4.2,"cache_read":122.62,"cache_write_5m":0.0,"cache_write_1h":45.05,"uncached_input":0.01,"miss_cost":38.14,"miss_turns":14,"normal_cost":133.74,"normal_turns":1005},{"date":"Apr 02","turns":514,"total":77.37,"output":4.18,"cache_read":49.59,"cache_write_5m":0.0,"cache_write_1h":23.6,"uncached_input":0.0,"miss_cost":18.65,"miss_turns":11,"normal_cost":58.72,"normal_turns":503},{"date":"Mar 27","turns":443,"total":45.75,"output":2.14,"cache_read":37.83,"cache_write_5m":0.0,"cache_write_1h":5.71,"uncached_input":0.06,"miss_cost":0.7,"miss_turns":5,"normal_cost":45.05,"normal_turns":438},{"date":"Apr 06","turns":453,"total":43.84,"output":1.91,"cache_read":27.72,"cache_write_5m":14.17,"cache_write_1h":0.0,"uncached_input":0.03,"miss_cost":10.87,"miss_turns":18,"normal_cost":32.96,"normal_turns":435},{"date":"Apr 06","turns":504,"total":43.09,"output":2.48,"cache_read":35.0,"cache_write_5m":5.6,"cache_write_1h":0.0,"uncached_input":0.0,"miss_cost":2.58,"miss_turns":6,"normal_cost":40.51,"normal_turns":498},{"date":"Apr 22","turns":506,"total":31.86,"output":10.88,"cache_read":15.15,"cache_write_5m":5.83,"cache_write_1h":0.0,"uncached_input":0.0,"miss_cost":2.3,"miss_turns":17,"normal_cost":29.55,"normal_turns":489},{"date":"Apr 02","turns":236,"total":23.8,"output":1.83,"cache_read":14.39,"cache_write_5m":0.0,"cache_write_1h":7.58,"uncached_input":0.0,"miss_cost":4.91,"miss_turns":8,"normal_cost":18.89,"normal_turns":228},{"date":"Apr 21","turns":408,"total":20.89,"output":6.25,"cache_read":11.5,"cache_write_5m":3.13,"cache_write_1h":0.0,"uncached_input":0.0,"miss_cost":0.75,"miss_turns":7,"normal_cost":20.14,"normal_turns":401},{"date":"Mar 27","turns":320,"total":18.41,"output":1.07,"cache_read":12.28,"cache_write_5m":0.0,"cache_write_1h":5.06,"uncached_input":0.0,"miss_cost":3.23,"miss_turns":6,"normal_cost":15.18,"normal_turns":314},{"date":"Mar 25","turns":241,"total":18.05,"output":1.28,"cache_read":11.8,"cache_write_5m":0.0,"cache_write_1h":4.87,"uncached_input":0.1,"miss_cost":1.89,"miss_turns":6,"normal_cost":16.16,"normal_turns":235}];
+const dpr = window.devicePixelRatio || 1;
+
+const CATS = [
+  { key: 'cache_read',     label: 'Cache Reads',      color: '#58a6ff' },
+  { key: 'cache_write_1h', label: 'Cache Writes (1h)', color: '#f85149' },
+  { key: 'cache_write_5m', label: 'Cache Writes (5m)', color: '#ffa657' },
+  { key: 'output',         label: 'Output Tokens',     color: '#3fb950' },
+  { key: 'uncached_input', label: 'Uncached Input',    color: '#8b949e' },
+];
+
+function initCanvas(id, w, h) {
+  const c = document.getElementById(id);
+  c.width = w * dpr;
+  c.height = h * dpr;
+  c.style.width = w + 'px';
+  c.style.height = h + 'px';
+  const ctx = c.getContext('2d');
+  ctx.scale(dpr, dpr);
+  return ctx;
+}
+
+// ── Donut: cost by category ──
+function drawDonut(canvasId, legendId, slices) {
+  const ctx = initCanvas(canvasId, 220, 220);
+  const cx = 110, cy = 110, r = 90, inner = 55;
+  const total = slices.reduce((s, sl) => s + sl.value, 0);
+  let angle = -Math.PI / 2;
+
+  slices.forEach(sl => {
+    const sweep = (sl.value / total) * Math.PI * 2;
+    ctx.beginPath();
+    ctx.arc(cx, cy, r, angle, angle + sweep);
+    ctx.arc(cx, cy, inner, angle + sweep, angle, true);
+    ctx.closePath();
+    ctx.fillStyle = sl.color;
+    ctx.fill();
+    angle += sweep;
+  });
+
+  // Center text
+  ctx.fillStyle = '#e6edf3';
+  ctx.font = 'bold 20px monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText('$' + total.toFixed(0), cx, cy + 2);
+  ctx.fillStyle = '#8b949e';
+  ctx.font = '11px monospace';
+  ctx.fillText('total', cx, cy + 18);
+
+  // Legend
+  const el = document.getElementById(legendId);
+  el.innerHTML = slices.map(sl => {
+    const pct = (sl.value / total * 100).toFixed(1);
+    return `<div class="donut-legend-item">
+      <span class="donut-swatch" style="background:${sl.color}"></span>
+      <span class="donut-legend-pct">${pct}%</span>
+      <span class="donut-legend-val">$${sl.value.toFixed(0)}</span>
+      <span class="donut-legend-label">${sl.label}</span>
+    </div>`;
+  }).join('');
+}
+
+// Category donut
+const catTotals = CATS.map(c => ({
+  label: c.label, color: c.color,
+  value: DATA.reduce((s, d) => s + d[c.key], 0)
+})).filter(s => s.value > 0.01);
+drawDonut('donut', 'donutLegend', catTotals);
+
+// Miss vs normal donut
+const missTotal = DATA.reduce((s, d) => s + d.miss_cost, 0);
+const normalTotal = DATA.reduce((s, d) => s + d.normal_cost, 0);
+drawDonut('missDonut', 'missLegend', [
+  { label: 'Cache Miss Turns', color: '#f85149', value: missTotal },
+  { label: 'Normal Turns', color: '#58a6ff', value: normalTotal },
+]);
+
+// ── Stacked bar: per-session breakdown ──
+(function() {
+  const W = 1100, H = 400;
+  const pad = { top: 20, right: 30, bottom: 50, left: 70 };
+  const pW = W - pad.left - pad.right;
+  const pH = H - pad.top - pad.bottom;
+  const ctx = initCanvas('stackedBar', W, H);
+
+  const maxVal = Math.max(...DATA.map(d => d.total)) * 1.05;
+  const barW = Math.min(50, pW / DATA.length * 0.7);
+  const gap = pW / DATA.length;
+
+  // Grid
+  ctx.strokeStyle = '#21262d';
+  ctx.lineWidth = 1;
+  for (let i = 0; i <= 5; i++) {
+    const y = pad.top + pH - (i / 5) * pH;
+    ctx.beginPath();
+    ctx.moveTo(pad.left, y);
+    ctx.lineTo(W - pad.right, y);
+    ctx.stroke();
+    ctx.fillStyle = '#484f58';
+    ctx.font = '11px monospace';
+    ctx.textAlign = 'right';
+    ctx.fillText('$' + (maxVal * i / 5).toFixed(0), pad.left - 8, y + 4);
+  }
+
+  DATA.forEach((d, i) => {
+    const x = pad.left + i * gap + gap / 2 - barW / 2;
+    let yOff = 0;
+
+    CATS.forEach(cat => {
+      const val = d[cat.key];
+      const h = (val / maxVal) * pH;
+      ctx.fillStyle = cat.color;
+      ctx.globalAlpha = 0.85;
+      ctx.fillRect(x, pad.top + pH - yOff - h, barW, h);
+      yOff += h;
+    });
+    ctx.globalAlpha = 1;
+
+    // Label
+    ctx.fillStyle = '#8b949e';
+    ctx.font = '11px monospace';
+    ctx.textAlign = 'center';
+    ctx.save();
+    ctx.translate(x + barW / 2, pad.top + pH + 16);
+    ctx.fillText(d.date, 0, 0);
+    ctx.fillText(d.turns + 't', 0, 14);
+    ctx.restore();
+  });
+
+  // Legend
+  const legY = pad.top;
+  CATS.forEach((cat, i) => {
+    const lx = W - pad.right - 180;
+    const ly = legY + i * 18;
+    ctx.fillStyle = cat.color;
+    ctx.fillRect(lx, ly, 12, 12);
+    ctx.fillStyle = '#8b949e';
+    ctx.font = '11px monospace';
+    ctx.textAlign = 'left';
+    ctx.fillText(cat.label, lx + 18, ly + 10);
+  });
+
+  // Insight
+  const readPct = (catTotals.find(c => c.label === 'Cache Reads')?.value || 0) / catTotals.reduce((s, c) => s + c.value, 0) * 100;
+  const writePct = ((catTotals.find(c => c.label === 'Cache Writes (1h)')?.value || 0) + (catTotals.find(c => c.label === 'Cache Writes (5m)')?.value || 0)) / catTotals.reduce((s, c) => s + c.value, 0) * 100;
+  document.getElementById('barInsight').innerHTML =
+    `<strong>${readPct.toFixed(0)}%</strong> of your spend is cache reads — the "normal" cost of a growing context window. ` +
+    `<strong>${writePct.toFixed(0)}%</strong> goes to cache writes (mostly 1h TTL), which spike on cache misses. ` +
+    `Output tokens are only <strong>${(100 - readPct - writePct).toFixed(0)}%</strong> — you're paying far more to <em>remember</em> the conversation than to <em>generate</em> responses.`;
+})();
+
+// ── Cache miss impact per session ──
+(function() {
+  const W = 1100, H = 350;
+  const pad = { top: 20, right: 30, bottom: 50, left: 70 };
+  const pW = W - pad.left - pad.right;
+  const pH = H - pad.top - pad.bottom;
+  const ctx = initCanvas('missBar', W, H);
+
+  const maxVal = Math.max(...DATA.map(d => d.total)) * 1.05;
+  const barW = Math.min(22, pW / DATA.length * 0.35);
+  const gap = pW / DATA.length;
+
+  ctx.strokeStyle = '#21262d';
+  ctx.lineWidth = 1;
+  for (let i = 0; i <= 5; i++) {
+    const y = pad.top + pH - (i / 5) * pH;
+    ctx.beginPath();
+    ctx.moveTo(pad.left, y);
+    ctx.lineTo(W - pad.right, y);
+    ctx.stroke();
+    ctx.fillStyle = '#484f58';
+    ctx.font = '11px monospace';
+    ctx.textAlign = 'right';
+    ctx.fillText('$' + (maxVal * i / 5).toFixed(0), pad.left - 8, y + 4);
+  }
+
+  DATA.forEach((d, i) => {
+    const x = pad.left + i * gap + gap / 2;
+
+    // Normal turns bar
+    const normalH = (d.normal_cost / maxVal) * pH;
+    ctx.fillStyle = '#58a6ff';
+    ctx.globalAlpha = 0.7;
+    ctx.fillRect(x - barW - 1, pad.top + pH - normalH, barW, normalH);
+
+    // Miss turns bar
+    const missH = (d.miss_cost / maxVal) * pH;
+    ctx.fillStyle = '#f85149';
+    ctx.globalAlpha = 0.85;
+    ctx.fillRect(x + 1, pad.top + pH - missH, barW, missH);
+    ctx.globalAlpha = 1;
+
+    // Miss % label
+    if (d.miss_turns > 0) {
+      const missPct = (d.miss_cost / d.total * 100).toFixed(0);
+      ctx.fillStyle = '#f85149';
+      ctx.font = '11px monospace';
+      ctx.textAlign = 'center';
+      ctx.fillText(missPct + '%', x + 1 + barW / 2, pad.top + pH - missH - 6);
+    }
+
+    // Session label
+    ctx.fillStyle = '#8b949e';
+    ctx.font = '11px monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText(d.date, x, pad.top + pH + 16);
+    ctx.fillText(d.turns + 't', x, pad.top + pH + 30);
+  });
+
+  // Legend
+  ctx.fillStyle = '#58a6ff';
+  ctx.globalAlpha = 0.7;
+  ctx.fillRect(W - 220, pad.top, 12, 12);
+  ctx.globalAlpha = 1;
+  ctx.fillStyle = '#8b949e';
+  ctx.font = '12px monospace';
+  ctx.textAlign = 'left';
+  ctx.fillText('Normal turns', W - 204, pad.top + 10);
+
+  ctx.fillStyle = '#f85149';
+  ctx.globalAlpha = 0.85;
+  ctx.fillRect(W - 220, pad.top + 20, 12, 12);
+  ctx.globalAlpha = 1;
+  ctx.fillStyle = '#8b949e';
+  ctx.fillText('Cache miss turns', W - 204, pad.top + 30);
+})();
+
+</script>
+</body>
+</html>

@@ -97,6 +97,9 @@ def parse_session(filepath: str) -> dict:
     first_ts = None
     last_ts = None
 
+    clear_before_next_turn = False
+    clear_turns = []
+
     with open(filepath, "r", encoding="utf-8", errors="replace") as f:
         for line_num, line in enumerate(f, 1):
             line = line.strip()
@@ -107,6 +110,12 @@ def parse_session(filepath: str) -> dict:
             except json.JSONDecodeError:
                 continue
 
+            # Detect /clear commands
+            if entry.get("type") == "user":
+                content = str(entry.get("message", {}).get("content", ""))
+                if "/clear" in content[:500]:
+                    clear_before_next_turn = True
+
             # Only care about assistant messages with usage data
             if entry.get("type") != "assistant":
                 continue
@@ -115,6 +124,10 @@ def parse_session(filepath: str) -> dict:
             usage = msg.get("usage", {})
             if not usage:
                 continue
+
+            if clear_before_next_turn:
+                clear_turns.append(len(turns))
+                clear_before_next_turn = False
 
             # Track timestamps
             ts_str = entry.get("timestamp")
@@ -153,6 +166,7 @@ def parse_session(filepath: str) -> dict:
         "session_id": session_id,
         "filepath": filepath,
         "turns": turns,
+        "clear_turns": clear_turns,
         "models": models_seen,
         "first_ts": first_ts,
         "last_ts": last_ts,
@@ -459,6 +473,52 @@ def output_csv(all_sessions: list, all_costs: list):
               f"{c['total_cache_read_tokens']},{c['total_5m_write_tokens']},{c['total_1h_write_tokens']}")
 
 
+def output_curves(all_sessions: list, all_costs: list, top_n: int = 15):
+    """Output per-turn curve data as JSON for chart visualization."""
+    ranked = sorted(range(len(all_costs)),
+                    key=lambda i: all_costs[i]["actual_cost"], reverse=True)[:top_n]
+
+    curves = []
+    for idx in ranked:
+        s = all_sessions[idx]
+        c = all_costs[idx]
+        turns = s["turns"]
+        details = c["turn_details"]
+
+        cumulative = []
+        context_size = []
+        running = 0.0
+        step = max(1, len(turns) // 500)
+
+        for i, (turn, det) in enumerate(zip(turns, details)):
+            running += det["actual"]
+            if i % step == 0 or i == len(turns) - 1:
+                cumulative.append(round(running, 4))
+                context_size.append(
+                    turn["input_tokens"]
+                    + turn["cache_read_input_tokens"]
+                    + turn["cache_creation_input_tokens"]
+                )
+
+        date_str = s["first_ts"].strftime("%b %d") if s["first_ts"] else "unknown"
+        is_opus = any("opus" in m.lower() for m in s["models"] if m)
+        clears = [t // step for t in s.get("clear_turns", []) if t > 0]
+
+        curves.append({
+            "id": s["session_id"][:24],
+            "date": date_str,
+            "total": round(c["actual_cost"], 2),
+            "num_turns": len(turns),
+            "is_opus": is_opus,
+            "cumulative": cumulative,
+            "context_size": context_size,
+            "clear_turns": clears,
+            "step": step,
+        })
+
+    print(json.dumps(curves, separators=(",", ":")))
+
+
 def find_session_files(path: str) -> list:
     """Find all JSONL session files under a path."""
     p = Path(path)
@@ -485,6 +545,7 @@ def main():
         help="Path to projects directory or a single .jsonl file (default: ~/.claude/projects/)"
     )
     parser.add_argument("--csv", action="store_true", help="Output CSV instead of text report")
+    parser.add_argument("--curves", action="store_true", help="Output per-turn JSON curve data for chart visualization")
     parser.add_argument("--top", type=int, default=5, help="Show top N most expensive sessions (default: 5)")
     parser.add_argument("--all", action="store_true", help="Show details for every session")
     parser.add_argument("--since", type=str, help="Only include sessions after this date (YYYY-MM-DD)")
@@ -539,6 +600,11 @@ def main():
     # CSV mode
     if args.csv:
         output_csv(all_sessions, all_costs)
+        return
+
+    # Curves mode
+    if args.curves:
+        output_curves(all_sessions, all_costs, top_n=args.top)
         return
 
     # Text report
