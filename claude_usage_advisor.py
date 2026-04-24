@@ -1226,7 +1226,59 @@ def generate_html(report):
 
 # ── Team HTML report ─────────────────────────────────────────────────────────
 
-def _build_range_content(team, report):
+def compute_deep_dive_data(sessions, costs_list):
+    """Compute data for progressive-disclosure charts."""
+    daily = defaultdict(lambda: {"spend": 0.0, "cache_read_tokens": 0, "cache_write_tokens": 0})
+    for s, c in zip(sessions, costs_list):
+        if not s["first_ts"]:
+            continue
+        day = s["first_ts"].strftime("%Y-%m-%d")
+        daily[day]["spend"] += c["actual"]
+        daily[day]["cache_read_tokens"] += c["cache_read_tokens"]
+        daily[day]["cache_write_tokens"] += c["cache_write_tokens"]
+    daily_list = []
+    for day in sorted(daily.keys()):
+        d = daily[day]
+        tc = d["cache_read_tokens"] + d["cache_write_tokens"]
+        daily_list.append({
+            "date": day,
+            "spend": round(d["spend"], 2),
+            "cache_hit_rate": round((d["cache_read_tokens"] / tc * 100) if tc > 0 else 0, 1),
+        })
+    miss_sessions = []
+    for s, c in zip(sessions, costs_list):
+        if c["mid_session_rebuilds"] == 0:
+            continue
+        tcs = c["turn_costs"]
+        mc = sum(tc["actual"] for i, tc in enumerate(tcs) if tc["is_rebuild"] and i > 0)
+        miss_sessions.append({
+            "id": s["session_id"][:16],
+            "date": s["first_ts"].strftime("%b %d") if s["first_ts"] else "?",
+            "total_cost": round(c["actual"], 2),
+            "miss_count": c["mid_session_rebuilds"],
+            "miss_cost": round(mc, 2),
+            "turns": int(c["turns"]),
+        })
+    miss_sessions.sort(key=lambda x: x["miss_cost"], reverse=True)
+    miss_sessions = miss_sessions[:10]
+    ranked = sorted(zip(sessions, costs_list), key=lambda sc: sc[1]["actual"], reverse=True)
+    cost_curves = []
+    for s, c in ranked[:15]:
+        cum, run = [], 0.0
+        for tc in c["turn_costs"]:
+            run += tc["actual"]
+            cum.append(round(run, 4))
+        cost_curves.append({
+            "id": s["session_id"][:16],
+            "date": s["first_ts"].strftime("%b %d") if s["first_ts"] else "?",
+            "total": round(c["actual"], 2),
+            "turns": int(c["turns"]),
+            "cumulative": cum,
+        })
+    return {"daily": daily_list, "miss_sessions": miss_sessions, "cost_curves": cost_curves}
+
+
+def _build_range_content(team, report, deep_data):
     """Build HTML content for one date range (summary + cards)."""
     t = team
     r = report
@@ -1453,16 +1505,24 @@ def _build_range_content(team, report):
     {nc_items_html}
   </div>"""
 
+    deep_json = json.dumps(deep_data).replace('</', '<\\/')
+
     return f"""
+    <script type="application/json" class="deep-data">{deep_json}</script>
+
     <div class="range-summary">
       <div class="period">{start_str} &ndash; {end_str}</div>
       <div class="summary-line">${o["total_spend"]:.0f} total &middot; {o["session_count"]} sessions &middot; ${o["daily_avg"]:.0f}/day avg</div>
+      <a class="drill-link" href="#" data-chart="daily" data-label-closed="See daily breakdown &#8594;" data-label-open="Hide daily breakdown">See daily breakdown &#8594;</a>
     </div>
+    <div class="chart-drawer" data-chart="daily"></div>
 
     <div class="card miss">
       <div class="card-label">Cache Miss Tax</div>
       {miss_card}
+      <a class="drill-link" href="#" data-chart="miss-sessions" data-label-closed="See which sessions &#8594;" data-label-open="Hide sessions">See which sessions &#8594;</a>
     </div>
+    <div class="chart-drawer" data-chart="miss-sessions"></div>
 
     <div class="card gaps">
       <div class="card-label">Idle Gap Penalty</div>
@@ -1472,6 +1532,11 @@ def _build_range_content(team, report):
     <div class="card size">
       <div class="card-label">Session Size Impact</div>
       {size_card}
+      <a class="drill-link" href="#" data-chart="cost-curves" data-label-closed="See cost curves &#8594;" data-label-open="Hide cost curves">See cost curves &#8594;</a>
+    </div>
+    <div class="chart-drawer" data-chart="cost-curves">
+      <canvas class="curves-canvas" style="width:100%;height:400px"></canvas>
+      <div class="curves-legend"></div>
     </div>
 
     <div class="card rec">
@@ -1493,7 +1558,7 @@ def generate_team_html(preset_data, default_range="30d"):
     for key in range_order:
         if key not in preset_data:
             continue
-        _, _, label = preset_data[key]
+        _, _, label, _ = preset_data[key]
         active = " active" if key == default_range else ""
         tabs_html += f'    <button class="range-btn{active}" data-range="{key}">{label}</button>\n'
 
@@ -1501,10 +1566,238 @@ def generate_team_html(preset_data, default_range="30d"):
     for key in range_order:
         if key not in preset_data:
             continue
-        team, report, label = preset_data[key]
+        team, report, label, deep = preset_data[key]
         active = " active" if key == default_range else ""
-        content = _build_range_content(team, report)
+        content = _build_range_content(team, report, deep)
         panels_html += f'\n  <div class="range-panel{active}" data-range="{key}">{content}\n  </div>\n'
+
+    chart_css = """
+  /* Drill-down links */
+  .drill-link {
+    display: inline-block;
+    margin-top: 16px;
+    font-size: 14px;
+    color: #58a6ff;
+    cursor: pointer;
+    text-decoration: none;
+  }
+  .drill-link:hover { color: #79c0ff; }
+
+  /* Chart drawers */
+  .chart-drawer {
+    display: none;
+    background: #161b22;
+    border: 1px solid #30363d;
+    border-radius: 12px;
+    padding: 24px;
+    margin-bottom: 24px;
+    animation: drawerIn 0.3s ease;
+  }
+  .chart-drawer.open { display: block; }
+  @keyframes drawerIn {
+    from { opacity: 0; transform: translateY(-8px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  .daily-chart-title {
+    font-size: 12px; font-weight: 600;
+    text-transform: uppercase; letter-spacing: 1.5px;
+    color: #8b949e; margin-bottom: 16px;
+  }
+  .daily-row {
+    display: grid;
+    grid-template-columns: 50px 1fr 70px;
+    align-items: center; gap: 12px; margin-bottom: 4px;
+  }
+  .daily-date { font-size: 13px; color: #8b949e; text-align: right; }
+  .daily-track {
+    height: 24px; background: #21262d;
+    border-radius: 6px; overflow: hidden;
+  }
+  .daily-fill {
+    height: 100%; background: #58a6ff;
+    border-radius: 6px; min-width: 4px;
+    display: flex; align-items: center;
+    padding-left: 8px; font-size: 13px;
+    color: #0d1117; font-weight: 600; white-space: nowrap;
+  }
+  .daily-amount {
+    font-size: 14px; color: #e6edf3;
+    font-weight: 600; text-align: right;
+  }
+
+  .hitrate-chart { margin-top: 32px; }
+  .hitrate-row { display: flex; gap: 3px; flex-wrap: wrap; }
+  .hitrate-cell {
+    padding: 6px 10px; border-radius: 4px;
+    font-size: 13px; font-weight: 600;
+    color: #0d1117; text-align: center; min-width: 44px;
+  }
+  .hitrate-dates {
+    display: flex; justify-content: space-between;
+    font-size: 13px; color: #656d76; margin-top: 8px;
+  }
+
+  .miss-table { display: flex; flex-direction: column; gap: 12px; }
+  .miss-row {
+    background: #0d1117; border: 1px solid #21262d;
+    border-radius: 8px; padding: 16px;
+  }
+  .miss-meta { display: flex; gap: 12px; margin-bottom: 8px; }
+  .miss-date { font-size: 14px; font-weight: 600; color: #c9d1d9; }
+  .miss-id { font-size: 13px; color: #656d76; font-family: 'SF Mono', monospace; }
+  .miss-bar-track {
+    height: 8px; background: #21262d;
+    border-radius: 4px; overflow: hidden; margin-bottom: 8px;
+  }
+  .miss-bar-fill {
+    height: 100%; background: #f85149;
+    border-radius: 4px; min-width: 4px;
+  }
+  .miss-nums { display: flex; justify-content: space-between; font-size: 14px; }
+  .miss-count { color: #8b949e; }
+  .miss-cost { color: #f85149; font-weight: 600; }
+
+  .curves-canvas { width: 100%; height: 400px; display: block; }
+  .curves-legend {
+    display: grid; grid-template-columns: repeat(3, 1fr);
+    gap: 6px 16px; margin-top: 16px;
+  }
+  .curve-legend-item {
+    display: flex; align-items: center; gap: 8px;
+    font-size: 13px; color: #8b949e;
+  }
+  .curve-swatch {
+    width: 20px; height: 3px; border-radius: 2px; flex-shrink: 0;
+  }
+  .no-data {
+    font-size: 14px; color: #656d76;
+    text-align: center; padding: 32px 0;
+  }
+"""
+
+    chart_js = """
+document.addEventListener('click', function(e) {
+  var link = e.target.closest('.drill-link');
+  if (!link) return;
+  e.preventDefault();
+  var chartId = link.getAttribute('data-chart');
+  var panel = link.closest('.range-panel');
+  var drawer = panel.querySelector('.chart-drawer[data-chart="' + chartId + '"]');
+  if (drawer.classList.contains('open')) {
+    drawer.classList.remove('open');
+    link.textContent = link.getAttribute('data-label-closed');
+  } else {
+    drawer.classList.add('open');
+    link.textContent = link.getAttribute('data-label-open');
+    initChart(drawer, chartId, panel);
+  }
+});
+
+function initChart(drawer, chartId, panel) {
+  if (drawer.getAttribute('data-init')) return;
+  drawer.setAttribute('data-init', '1');
+  var data = JSON.parse(panel.querySelector('.deep-data').textContent);
+  requestAnimationFrame(function() {
+    if (chartId === 'daily') renderDailySpend(drawer, data.daily);
+    else if (chartId === 'miss-sessions') renderMissSessions(drawer, data.miss_sessions);
+    else if (chartId === 'cost-curves') renderCostCurves(drawer, data.cost_curves);
+  });
+}
+
+function renderDailySpend(el, daily) {
+  if (!daily.length) { el.innerHTML = '<div class="no-data">No daily data.</div>'; return; }
+  var max = Math.max.apply(null, daily.map(function(d) { return d.spend; }));
+  var h = '<div class="daily-chart-title">DAILY SPEND (ACTUAL)</div>';
+  daily.forEach(function(d) {
+    var pct = max > 0 ? (d.spend / max * 100) : 0;
+    var dateLabel = d.date.slice(5);
+    var inner = pct > 20 ? '$' + d.spend.toFixed(2) : '';
+    h += '<div class="daily-row"><span class="daily-date">' + dateLabel + '</span>' +
+      '<div class="daily-track"><div class="daily-fill" style="width:' + pct.toFixed(1) + '%">' + inner + '</div></div>' +
+      '<span class="daily-amount">$' + d.spend.toFixed(2) + '</span></div>';
+  });
+  h += '<div class="hitrate-chart"><div class="daily-chart-title">DAILY CACHE HIT RATE (TOKEN-WEIGHTED)</div><div class="hitrate-row">';
+  daily.forEach(function(d) {
+    var r = d.cache_hit_rate;
+    var bg = r >= 95 ? '#3fb950' : r >= 90 ? '#56d364' : r >= 85 ? '#d29922' : '#f85149';
+    h += '<div class="hitrate-cell" style="background:' + bg + '" title="' + d.date + ': ' + r + '%">' + Math.round(r) + '%</div>';
+  });
+  h += '</div>';
+  if (daily.length > 1) {
+    h += '<div class="hitrate-dates"><span>' + daily[0].date + '</span><span>' + daily[daily.length - 1].date + '</span></div>';
+  }
+  h += '</div>';
+  el.innerHTML = h;
+}
+
+function renderMissSessions(el, sessions) {
+  if (!sessions.length) { el.innerHTML = '<div class="no-data">No sessions with mid-session cache misses.</div>'; return; }
+  var maxCost = Math.max.apply(null, sessions.map(function(s) { return s.miss_cost; }));
+  var h = '<div class="daily-chart-title">SESSIONS WITH MOST CACHE MISSES</div><div class="miss-table">';
+  sessions.forEach(function(s) {
+    var pct = maxCost > 0 ? (s.miss_cost / maxCost * 100) : 0;
+    h += '<div class="miss-row"><div class="miss-meta"><span class="miss-date">' + s.date + '</span>' +
+      '<span class="miss-id">' + s.id + '</span></div>' +
+      '<div class="miss-bar-track"><div class="miss-bar-fill" style="width:' + pct.toFixed(1) + '%"></div></div>' +
+      '<div class="miss-nums"><span class="miss-count">' + s.miss_count + ' misses · ' + s.turns + ' turns · $' + s.total_cost.toFixed(2) + ' total</span>' +
+      '<span class="miss-cost">$' + s.miss_cost.toFixed(2) + ' from misses</span></div></div>';
+  });
+  h += '</div>';
+  el.innerHTML = h;
+}
+
+function renderCostCurves(el, curves) {
+  if (!curves.length) { el.innerHTML = '<div class="no-data">No session data.</div>'; return; }
+  var colors = ['#58a6ff','#f85149','#3fb950','#d29922','#bc8cff','#79c0ff','#56d364','#e3b341','#ff7b72','#a5d6ff','#7ee787','#d2a8ff','#ffa657','#ff9bce','#7dcfff'];
+  var canvas = el.querySelector('canvas');
+  if (!canvas) return;
+  var ctx = canvas.getContext('2d');
+  var dpr = window.devicePixelRatio || 1;
+  var W = canvas.clientWidth;
+  var H = canvas.clientHeight;
+  canvas.width = W * dpr;
+  canvas.height = H * dpr;
+  ctx.scale(dpr, dpr);
+  var pad = {top: 20, right: 20, bottom: 40, left: 60};
+  var pW = W - pad.left - pad.right;
+  var pH = H - pad.top - pad.bottom;
+  var maxTurns = Math.max.apply(null, curves.map(function(c) { return c.cumulative.length; }));
+  var maxCost = Math.max.apply(null, curves.map(function(c) { return c.total; }));
+  ctx.strokeStyle = '#21262d'; ctx.lineWidth = 1;
+  ctx.fillStyle = '#8b949e'; ctx.font = '12px -apple-system, sans-serif'; ctx.textAlign = 'right';
+  for (var i = 0; i <= 4; i++) {
+    var y = pad.top + (pH / 4) * i;
+    ctx.beginPath(); ctx.moveTo(pad.left, y); ctx.lineTo(W - pad.right, y); ctx.stroke();
+    ctx.fillText('$' + Math.round(maxCost * (1 - i / 4)), pad.left - 8, y + 4);
+  }
+  ctx.textAlign = 'center';
+  for (var i = 0; i <= 4; i++) {
+    var x = pad.left + (pW / 4) * i;
+    ctx.fillText(Math.round(maxTurns * i / 4), x, H - pad.bottom + 20);
+  }
+  ctx.fillText('Turn #', W / 2, H - 4);
+  curves.forEach(function(s, idx) {
+    ctx.strokeStyle = colors[idx % colors.length];
+    ctx.lineWidth = 2; ctx.globalAlpha = 0.85;
+    ctx.beginPath();
+    s.cumulative.forEach(function(val, j) {
+      var x = pad.left + (j / Math.max(1, maxTurns - 1)) * pW;
+      var y = pad.top + pH - (val / maxCost) * pH;
+      if (j === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    });
+    ctx.stroke(); ctx.globalAlpha = 1;
+  });
+  var leg = el.querySelector('.curves-legend');
+  if (leg) {
+    var lh = '';
+    curves.forEach(function(s, idx) {
+      lh += '<div class="curve-legend-item"><span class="curve-swatch" style="background:' + colors[idx % colors.length] + '"></span>' + s.date + ' — $' + s.total.toFixed(0) + ' (' + s.turns + ' turns)</div>';
+    });
+    leg.innerHTML = lh;
+  }
+}
+"""
 
     return f"""<!DOCTYPE html>
 <html lang="en">
@@ -1748,6 +2041,8 @@ def generate_team_html(preset_data, default_range="30d"):
     margin-top: 40px; padding-top: 16px; border-top: 1px solid #21262d;
   }}
 
+  {chart_css}
+
   @media (max-width: 640px) {{
     .hero-num {{ font-size: 36px; }}
     .hero-pair {{ gap: 16px; }}
@@ -1809,6 +2104,8 @@ function copyCmd(btn) {{
     setTimeout(function() {{ btn.textContent = 'Copy'; }}, 2000);
   }});
 }}
+
+{chart_js}
 </script>
 </body>
 </html>"""
@@ -1911,7 +2208,8 @@ def main():
                 f_sessions, f_costs = zip(*pairs)
                 r = run_analysis(list(f_sessions), list(f_costs))
                 t = compute_team_insights(list(f_sessions), list(f_costs))
-                preset_data[key] = (t, r, label)
+                d = compute_deep_dive_data(list(f_sessions), list(f_costs))
+                preset_data[key] = (t, r, label, d)
         print(generate_team_html(preset_data))
     elif args.html:
         print(generate_html(report))
