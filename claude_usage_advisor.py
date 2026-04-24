@@ -701,33 +701,159 @@ def print_text_report(report):
     print()
 
 
-# ── HTML report ──────────────────────────────────────────────────────────────
+# ── HTML report (slideshow) ──────────────────────────────────────────────────
+
+def _rec_visual(rec, report):
+    """Build a simple visual element for a recommendation slide."""
+    rid = rec["id"]
+    if rid in ("model_sonnet_default", "model_sonnet_short"):
+        opus_cost = report["spend_by_model"].get("opus", {}).get("cost", 0)
+        days = report["period"]["days"]
+        sav_total = (rec["savings_monthly"] or 0) / 30 * days
+        proposed = opus_cost - sav_total
+        if opus_cost <= 0:
+            return ""
+        pct_proposed = proposed / opus_cost * 100
+        return f"""
+        <div class="visual comparison">
+          <div class="comp-row">
+            <div class="comp-label">Current (Opus)</div>
+            <div class="comp-track"><div class="comp-fill" style="width:100%;background:#bc8cff"></div></div>
+            <div class="comp-value">${opus_cost:.0f}</div>
+          </div>
+          <div class="comp-row">
+            <div class="comp-label">With Sonnet</div>
+            <div class="comp-track"><div class="comp-fill" style="width:{pct_proposed:.0f}%;background:#79c0ff"></div></div>
+            <div class="comp-value">${proposed:.0f}</div>
+          </div>
+          <div class="comp-diff">-${sav_total:.0f} over {days} days</div>
+        </div>"""
+    elif rid == "cache_ttl_1h":
+        n = report["cache"]["avoidable_misses"]
+        return f"""
+        <div class="visual stat-block">
+          <div class="stat-big">{n}</div>
+          <div class="stat-desc">avoidable cache rebuilds</div>
+          <div class="stat-sub">from 5-60 min idle gaps — each one re-writes your full context</div>
+        </div>"""
+    elif rid == "cache_ttl_5m":
+        days = report["period"]["days"]
+        sav = (rec["savings_monthly"] or 0) / 30 * days
+        return f"""
+        <div class="visual stat-block">
+          <div class="stat-big">${sav:.0f}</div>
+          <div class="stat-desc">saved with cheaper 5m write rate</div>
+          <div class="stat-sub">1.25x vs 2x per cache write token</div>
+        </div>"""
+    elif rid == "context_bloat":
+        n = report["sessions"]["sessions_over_500k"]
+        return f"""
+        <div class="visual stat-block">
+          <div class="stat-big">{n}</div>
+          <div class="stat-desc">sessions over 500K context tokens</div>
+          <div class="stat-sub">large contexts drive up per-turn read costs</div>
+        </div>"""
+    return ""
+
 
 def generate_html(report):
     r = report
     p = r["period"]
     o = r["overview"]
+    c = r["cache"]
+    recs = r["recommendations"]
 
     start_str = p["start"].strftime("%b %d") if p["start"] else "?"
     end_str = p["end"].strftime("%b %d, %Y") if p["end"] else "?"
 
-    # Build recommendation cards
-    rec_cards = ""
-    for i, rec in enumerate(r["recommendations"], 1):
-        sav = f"~${rec['savings_monthly']:.0f}/mo" if rec["savings_monthly"] else ""
-        setting_html = rec["setting"].replace("\n", "<br>").replace("  ", "&nbsp;&nbsp;")
-        rec_cards += f"""
-        <div class="card rec-card">
-          <div class="rec-header">
-            <span class="rec-num">#{i}</span>
-            <span class="rec-title">{rec['title']}</span>
-            <span class="rec-savings">{sav}</span>
-          </div>
-          <p class="rec-detail">{rec['detail']}</p>
-          <div class="rec-setting"><code>{setting_html}</code></div>
-        </div>"""
+    # ── Build slides ─────────────────────────────────────────────────────
+    slides = []
 
-    # Build category bars
+    # Slide 0: Cover
+    if recs:
+        n = len(recs)
+        cover_sub = f'{n} setting{"s" if n != 1 else ""} to tune'
+        cover_sav = f'<div class="cover-savings">~${r["total_potential_savings"]:.0f}/mo potential savings</div>'
+    else:
+        cover_sub = "Your settings are well-tuned"
+        cover_sav = '<div class="cover-good">No changes needed</div>'
+
+    slides.append(f"""
+      <div class="slide-inner cover">
+        <div class="cover-label">Claude Code Usage Advisor</div>
+        <div class="big-number">${o['total_spend']:.0f}</div>
+        <div class="cover-period">{start_str} &ndash; {end_str}</div>
+        <div class="cover-meta">{o['session_count']} sessions &middot; {p['days']} days &middot; ${o['daily_avg']:.0f}/day avg</div>
+        <div class="cover-sub">{cover_sub}</div>
+        {cover_sav}
+      </div>""")
+
+    # Slides 1-N: Recommendations
+    for rec in recs:
+        sav = f"~${rec['savings_monthly']:.0f}/mo" if rec["savings_monthly"] else ""
+        visual = _rec_visual(rec, r)
+        setting_html = rec["setting"].replace("\n", "<br>").replace("  ", "&nbsp;&nbsp;")
+
+        slides.append(f"""
+      <div class="slide-inner rec">
+        <div class="rec-savings">{sav}</div>
+        <h2>{rec['title']}</h2>
+        {visual}
+        <p class="rec-detail">{rec['detail']}</p>
+        <div class="setting-block">
+          <code>{setting_html}</code>
+          <button class="copy-btn" onclick="copyCmd(this)">Copy</button>
+        </div>
+      </div>""")
+
+    # Action plan slide
+    action_items = ""
+    for i, rec in enumerate(recs, 1):
+        sav = f"~${rec['savings_monthly']:.0f}/mo" if rec["savings_monthly"] else ""
+        lines = rec["setting"].strip().split("\n")
+        cmd = next((l.strip() for l in lines if l.strip() and not l.strip().startswith(("#", "Or", "Upgrade", "Switch", "Remove", "or set", "For"))), lines[0].strip())
+        action_items += f"""
+          <div class="action-item">
+            <div class="action-num">{i}</div>
+            <div class="action-body">
+              <div class="action-title">{rec['title']}</div>
+              <code>{cmd}</code>
+            </div>
+            <div class="action-sav">{sav}</div>
+          </div>"""
+
+    if not recs:
+        action_items = """
+          <div class="all-good-card">
+            <div class="ag-label">All clear</div>
+            <div class="ag-text">Your Claude Code settings match your usage patterns.<br>No changes needed.</div>
+          </div>"""
+
+    total_sav = r["total_potential_savings"]
+    projected = o["daily_avg"] * 30
+    sav_pct = (total_sav / projected * 100) if projected > 0 else 0
+    savings_line = f'<div class="total-savings">~${total_sav:.0f}/mo estimated savings ({sav_pct:.0f}% of projected spend)</div>' if total_sav > 0 else ""
+
+    slides.append(f"""
+      <div class="slide-inner action">
+        <h2>{"Your Action Plan" if recs else "Summary"}</h2>
+        <div class="action-list">{action_items}</div>
+        {savings_line}
+        <button class="see-report" onclick="document.getElementById('appendix').scrollIntoView({{behavior:'smooth'}})">See full report</button>
+      </div>""")
+
+    # Build slides HTML
+    slides_html = ""
+    for i, s in enumerate(slides):
+        active = " active" if i == 0 else ""
+        slides_html += f'<div class="slide{active}" data-idx="{i}">{s}</div>\n'
+
+    dots_html = " ".join(
+        f'<button class="dot{" active" if i == 0 else ""}" data-idx="{i}"></button>'
+        for i in range(len(slides))
+    )
+
+    # ── Build appendix ───────────────────────────────────────────────────
     cat_bars = ""
     for label, key in [("Output tokens", "output"), ("Cache writes", "cache_write"),
                        ("Cache reads", "cache_read"), ("Uncached input", "uncached_input")]:
@@ -735,253 +861,358 @@ def generate_html(report):
         color = {"output": "#79c0ff", "cache_write": "#d29922",
                  "cache_read": "#3fb950", "uncached_input": "#8b949e"}[key]
         cat_bars += f"""
-        <div class="bar-row">
-          <span class="bar-label">{label}</span>
-          <div class="bar-track">
-            <div class="bar-fill" style="width:{d['pct']:.1f}%;background:{color}"></div>
-          </div>
-          <span class="bar-value">${d['cost']:.2f}</span>
-          <span class="bar-pct">{d['pct']:.0f}%</span>
-        </div>"""
+          <div class="a-bar-row">
+            <span class="a-bar-label">{label}</span>
+            <div class="a-bar-track"><div class="a-bar-fill" style="width:{d['pct']:.1f}%;background:{color}"></div></div>
+            <span class="a-bar-value">${d['cost']:.2f}</span>
+            <span class="a-bar-pct">{d['pct']:.0f}%</span>
+          </div>"""
 
-    # Build model bars
     model_bars = ""
     for tier, d in r["spend_by_model"].items():
         color = {"opus": "#bc8cff", "sonnet": "#79c0ff", "haiku": "#3fb950"}.get(tier, "#8b949e")
         model_bars += f"""
-        <div class="bar-row">
-          <span class="bar-label">{tier.capitalize()}</span>
-          <div class="bar-track">
-            <div class="bar-fill" style="width:{d['pct']:.1f}%;background:{color}"></div>
-          </div>
-          <span class="bar-value">${d['cost']:.2f}</span>
-          <span class="bar-pct">{d['pct']:.0f}%</span>
-        </div>"""
+          <div class="a-bar-row">
+            <span class="a-bar-label">{tier.capitalize()}</span>
+            <div class="a-bar-track"><div class="a-bar-fill" style="width:{d['pct']:.1f}%;background:{color}"></div></div>
+            <span class="a-bar-value">${d['cost']:.2f}</span>
+            <span class="a-bar-pct">{d['pct']:.0f}%</span>
+          </div>"""
 
-    # Build sessions table
     session_rows = ""
     for i, s in enumerate(r["sessions"]["top"][:10], 1):
         ctx = fmt_tokens(s["max_context"]) if s["max_context"] else "?"
         session_rows += f"""
-        <tr>
-          <td>#{i}</td>
-          <td>${s['cost']:.2f}</td>
-          <td>{s['date']}</td>
-          <td>{s['turns']}</td>
-          <td>{fmt_dur(s['duration_min'])}</td>
-          <td>{s['model'].capitalize()}</td>
-          <td>{ctx}</td>
-        </tr>"""
+          <tr><td>#{i}</td><td>${s['cost']:.2f}</td><td>{s['date']}</td>
+          <td>{s['turns']}</td><td>{fmt_dur(s['duration_min'])}</td>
+          <td>{s['model'].capitalize()}</td><td>{ctx}</td></tr>"""
 
-    # Cache health
-    c = r["cache"]
-    ttl_note_html = f'<p style="color:#8b949e;font-size:13px;margin-top:12px">{c.get("ttl_note","")}</p>' if c.get("ttl_note") else ""
-    cache_section = f"""
-    <div class="card">
-      <h2>Cache Health</h2>
-      <div class="stat-row">
-        <div class="stat">
-          <div class="stat-value">{c['hit_rate']:.1f}%</div>
-          <div class="stat-label">Cache Efficiency</div>
-        </div>
-        <div class="stat">
-          <div class="stat-value">{c['current_ttl']}</div>
-          <div class="stat-label">Current TTL</div>
-        </div>
-        <div class="stat">
-          <div class="stat-value">{c['total_rebuilds']}</div>
-          <div class="stat-label">Cache Rebuilds</div>
-        </div>
-        <div class="stat">
-          <div class="stat-value">{c['gaps_5_60']}</div>
-          <div class="stat-label">Avoidable Gaps (5-60m)</div>
-        </div>
-      </div>
-      {ttl_note_html}
-    </div>"""
-
-    # Savings banner
-    if r["total_potential_savings"] > 0:
-        projected = o["daily_avg"] * 30
-        pct = r["total_potential_savings"] / projected * 100 if projected > 0 else 0
-        savings_banner = f"""
-        <div class="savings-banner">
-          Estimated savings: <strong>~${r['total_potential_savings']:.0f}/month</strong>
-          ({pct:.0f}% of projected ${projected:.0f}/mo spend) — no workflow changes needed
-        </div>"""
-    else:
-        savings_banner = """
-        <div class="savings-banner good">
-          Your settings look well-tuned for your usage patterns. Keep it up.
-        </div>"""
+    ttl_note = f'<p class="a-note">{c.get("ttl_note","")}</p>' if c.get("ttl_note") else ""
+    insight = f'<div class="a-card"><h3>Key Insight</h3><p>{r.get("cost_insight","")}</p></div>' if r.get("cost_insight") else ""
 
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Claude Code Usage Advisor — {end_str}</title>
+<title>Claude Code Usage Advisor</title>
 <style>
   *, *::before, *::after {{ box-sizing: border-box; }}
   body {{
-    margin: 0; padding: 24px;
+    margin: 0; padding: 0;
     background: #0d1117; color: #e6edf3;
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
-    font-size: 14px; line-height: 1.5;
+    font-size: 16px; line-height: 1.5;
+    overflow-x: hidden;
   }}
-  .container {{ max-width: 860px; margin: 0 auto; }}
-  h1 {{
-    font-size: 24px; font-weight: 600; margin: 0 0 4px;
-    color: #f0f6fc;
-  }}
-  .subtitle {{ color: #8b949e; font-size: 14px; margin-bottom: 24px; }}
-  h2 {{ font-size: 18px; font-weight: 600; margin: 0 0 16px; color: #f0f6fc; }}
 
-  /* Stat cards */
-  .stat-grid {{
-    display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
-    gap: 12px; margin-bottom: 24px;
+  /* ── Slides ── */
+  .slide {{
+    min-height: 100vh; min-height: 100dvh;
+    display: none;
+    align-items: center; justify-content: center;
+    padding: 48px 24px 100px;
   }}
-  .stat-card {{
+  .slide.active {{ display: flex; }}
+  .slide-inner {{
+    max-width: 600px; width: 100%; text-align: center;
+  }}
+
+  /* ── Cover ── */
+  .cover-label {{
+    font-size: 14px; color: #8b949e;
+    text-transform: uppercase; letter-spacing: 3px;
+    margin-bottom: 32px;
+  }}
+  .big-number {{
+    font-size: 80px; font-weight: 800;
+    color: #f0f6fc; line-height: 1; margin-bottom: 8px;
+  }}
+  .cover-period {{ font-size: 18px; color: #8b949e; }}
+  .cover-meta {{ font-size: 14px; color: #484f58; margin-bottom: 40px; }}
+  .cover-sub {{ font-size: 22px; color: #c9d1d9; margin-bottom: 8px; }}
+  .cover-savings {{ font-size: 28px; font-weight: 700; color: #3fb950; }}
+  .cover-good {{ font-size: 20px; color: #58a6ff; }}
+
+  /* ── Rec slides ── */
+  .rec .rec-savings {{
+    font-size: 44px; font-weight: 800; color: #3fb950;
+    margin-bottom: 4px; line-height: 1;
+  }}
+  .rec h2 {{
+    font-size: 26px; font-weight: 600; color: #f0f6fc;
+    margin: 0 0 24px;
+  }}
+  .rec .rec-detail {{
+    font-size: 15px; color: #8b949e;
+    margin: 20px 0 28px; text-align: left; line-height: 1.7;
+  }}
+
+  /* Comparison bars */
+  .comparison {{ margin: 24px 0; }}
+  .comp-row {{
+    display: grid; grid-template-columns: 140px 1fr 80px;
+    align-items: center; gap: 12px; margin-bottom: 10px;
+  }}
+  .comp-label {{ font-size: 14px; color: #c9d1d9; text-align: right; }}
+  .comp-track {{
+    height: 36px; background: #21262d; border-radius: 6px; overflow: hidden;
+  }}
+  .comp-fill {{
+    height: 100%; border-radius: 6px;
+    transition: width 0.8s cubic-bezier(.4,0,.2,1) 0.15s;
+  }}
+  .slide:not(.active) .comp-fill {{ width: 0 !important; }}
+  .comp-value {{ font-size: 20px; font-weight: 700; color: #f0f6fc; }}
+  .comp-diff {{
+    text-align: right; font-size: 14px; color: #3fb950;
+    margin-top: 4px; font-weight: 600;
+  }}
+
+  /* Stat block */
+  .stat-block {{ margin: 28px 0; }}
+  .stat-block .stat-big {{
+    font-size: 72px; font-weight: 800; color: #f0f6fc; line-height: 1;
+    opacity: 1; transform: translateY(0);
+    transition: opacity 0.5s ease 0.1s, transform 0.5s ease 0.1s;
+  }}
+  .slide:not(.active) .stat-big {{ opacity: 0; transform: translateY(24px); }}
+  .stat-block .stat-desc {{ font-size: 20px; color: #8b949e; margin-top: 8px; }}
+  .stat-block .stat-sub {{ font-size: 14px; color: #484f58; margin-top: 4px; }}
+
+  /* Setting block */
+  .setting-block {{
+    background: #161b22; border: 1px solid #30363d; border-radius: 10px;
+    padding: 20px 24px; text-align: left; position: relative;
+  }}
+  .setting-block code {{
+    color: #79c0ff; font-size: 14px; white-space: pre-wrap; line-height: 1.8;
+  }}
+  .copy-btn {{
+    position: absolute; top: 12px; right: 12px;
+    background: #21262d; border: 1px solid #30363d; color: #8b949e;
+    border-radius: 6px; padding: 4px 14px; font-size: 13px; cursor: pointer;
+  }}
+  .copy-btn:hover {{ color: #e6edf3; border-color: #58a6ff; }}
+
+  /* ── Action plan ── */
+  .action h2 {{
+    font-size: 28px; font-weight: 600; color: #f0f6fc; margin: 0 0 32px;
+  }}
+  .action-list {{ text-align: left; }}
+  .action-item {{
+    display: flex; align-items: center; gap: 16px;
+    background: #161b22; border: 1px solid #30363d;
+    border-left: 3px solid #3fb950; border-radius: 10px;
+    padding: 20px 24px; margin-bottom: 12px;
+  }}
+  .action-num {{
+    font-size: 28px; font-weight: 800; color: #3fb950; min-width: 36px;
+  }}
+  .action-body {{ flex: 1; }}
+  .action-title {{ font-size: 16px; font-weight: 600; color: #f0f6fc; margin-bottom: 4px; }}
+  .action-body code {{ font-size: 13px; color: #79c0ff; }}
+  .action-sav {{ font-size: 18px; font-weight: 700; color: #3fb950; white-space: nowrap; }}
+  .total-savings {{
+    font-size: 22px; font-weight: 600; color: #3fb950;
+    margin: 28px 0 16px; text-align: center;
+  }}
+  .all-good-card {{
+    background: #0d1d31; border: 1px solid #1f6feb; border-radius: 10px;
+    padding: 32px; text-align: center;
+  }}
+  .ag-label {{ font-size: 28px; font-weight: 700; color: #58a6ff; margin-bottom: 8px; }}
+  .ag-text {{ font-size: 16px; color: #8b949e; }}
+  .see-report {{
+    background: none; border: 1px solid #30363d; color: #8b949e;
+    border-radius: 8px; padding: 12px 28px; font-size: 15px;
+    cursor: pointer; margin-top: 20px;
+  }}
+  .see-report:hover {{ color: #e6edf3; border-color: #58a6ff; }}
+
+  /* ── Nav ── */
+  .slide-nav {{
+    position: fixed; bottom: 0; left: 0; right: 0;
+    display: flex; align-items: center; justify-content: center;
+    gap: 20px; padding: 16px;
+    background: rgba(13,17,23,0.92);
+    backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+    border-top: 1px solid #21262d; z-index: 100;
+  }}
+  .nav-btn {{
+    background: #21262d; border: 1px solid #30363d; color: #e6edf3;
+    border-radius: 8px; width: 44px; height: 44px; font-size: 20px;
+    cursor: pointer; display: flex; align-items: center; justify-content: center;
+  }}
+  .nav-btn:hover {{ background: #30363d; }}
+  .nav-btn:disabled {{ opacity: 0.25; cursor: default; }}
+  .dots {{ display: flex; gap: 8px; }}
+  .dot {{
+    width: 10px; height: 10px; border-radius: 50%;
+    border: none; background: #30363d; cursor: pointer; padding: 0;
+    transition: background 0.2s;
+  }}
+  .dot.active {{ background: #58a6ff; }}
+  .slide-counter {{
+    font-size: 14px; color: #484f58; min-width: 50px; text-align: center;
+  }}
+
+  /* ── Appendix ── */
+  .appendix {{
+    max-width: 800px; margin: 0 auto;
+    padding: 64px 24px 120px;
+    border-top: 1px solid #21262d;
+  }}
+  .appendix h2 {{
+    font-size: 14px; font-weight: 600; color: #8b949e;
+    text-transform: uppercase; letter-spacing: 2px;
+    margin: 48px 0 8px;
+  }}
+  .appendix h2:first-child {{ margin-top: 0; }}
+  .a-card {{
     background: #161b22; border: 1px solid #30363d; border-radius: 8px;
-    padding: 16px; text-align: center;
+    padding: 20px; margin-bottom: 12px;
   }}
-  .stat-card .stat-value {{ font-size: 28px; font-weight: 700; color: #f0f6fc; }}
-  .stat-card .stat-label {{ font-size: 13px; color: #8b949e; margin-top: 4px; }}
-
-  /* Cards */
-  .card {{
-    background: #161b22; border: 1px solid #30363d; border-radius: 8px;
-    padding: 20px; margin-bottom: 16px;
+  .a-card h3 {{ font-size: 16px; color: #f0f6fc; margin: 0 0 12px; }}
+  .a-card p {{ font-size: 14px; color: #8b949e; margin: 0; line-height: 1.6; }}
+  .a-bar-row {{
+    display: grid; grid-template-columns: 120px 1fr 72px 40px;
+    align-items: center; gap: 8px; margin-bottom: 6px;
   }}
-
-  /* Savings banner */
-  .savings-banner {{
-    background: #0b2e13; border: 1px solid #238636; border-radius: 8px;
-    padding: 16px 20px; margin-bottom: 24px; font-size: 16px;
-    color: #3fb950; text-align: center;
-  }}
-  .savings-banner.good {{
-    background: #0d1d31; border-color: #1f6feb; color: #58a6ff;
-  }}
-  .savings-banner strong {{ font-size: 20px; }}
-
-  /* Recommendation cards */
-  .rec-card {{ border-left: 3px solid #3fb950; }}
-  .rec-header {{
-    display: flex; align-items: center; gap: 12px;
-    margin-bottom: 12px;
-  }}
-  .rec-num {{
-    background: #238636; color: #fff; border-radius: 4px;
-    padding: 2px 8px; font-size: 13px; font-weight: 600;
-  }}
-  .rec-title {{ font-size: 16px; font-weight: 600; color: #f0f6fc; flex: 1; }}
-  .rec-savings {{
-    font-size: 16px; font-weight: 700; color: #3fb950;
-  }}
-  .rec-detail {{ color: #c9d1d9; margin: 0 0 12px; font-size: 14px; }}
-  .rec-setting {{
-    background: #0d1117; border: 1px solid #30363d; border-radius: 6px;
-    padding: 12px 16px; font-size: 13px;
-  }}
-  .rec-setting code {{ color: #79c0ff; white-space: pre-wrap; }}
-
-  /* Bar charts */
-  .bar-row {{
-    display: grid; grid-template-columns: 130px 1fr 80px 44px;
-    align-items: center; gap: 8px; margin-bottom: 8px;
-  }}
-  .bar-label {{ font-size: 13px; color: #c9d1d9; }}
-  .bar-track {{
-    height: 20px; background: #21262d; border-radius: 4px; overflow: hidden;
-  }}
-  .bar-fill {{ height: 100%; border-radius: 4px; min-width: 2px; }}
-  .bar-value {{ font-size: 14px; color: #e6edf3; text-align: right; font-weight: 500; }}
-  .bar-pct {{ font-size: 13px; color: #8b949e; text-align: right; }}
-
-  /* Stat row (inline stats) */
-  .stat-row {{
-    display: flex; gap: 24px; flex-wrap: wrap;
-  }}
-  .stat {{ text-align: center; flex: 1; min-width: 100px; }}
-  .stat .stat-value {{ font-size: 24px; font-weight: 700; color: #f0f6fc; }}
-  .stat .stat-label {{ font-size: 13px; color: #8b949e; }}
-
-  /* Table */
+  .a-bar-label {{ font-size: 13px; color: #c9d1d9; }}
+  .a-bar-track {{ height: 18px; background: #21262d; border-radius: 4px; overflow: hidden; }}
+  .a-bar-fill {{ height: 100%; border-radius: 4px; min-width: 2px; }}
+  .a-bar-value {{ font-size: 14px; color: #e6edf3; text-align: right; font-weight: 500; }}
+  .a-bar-pct {{ font-size: 13px; color: #8b949e; text-align: right; }}
+  .a-stat-row {{ display: flex; gap: 24px; flex-wrap: wrap; margin-bottom: 8px; }}
+  .a-stat {{ text-align: center; flex: 1; min-width: 90px; }}
+  .a-stat .val {{ font-size: 22px; font-weight: 700; color: #f0f6fc; }}
+  .a-stat .lbl {{ font-size: 13px; color: #8b949e; }}
+  .a-note {{ font-size: 13px; color: #8b949e; margin-top: 8px; }}
   table {{
-    width: 100%; border-collapse: collapse; font-size: 14px;
+    width: 100%; border-collapse: collapse; font-size: 14px; margin-top: 8px;
   }}
   th {{
     text-align: left; font-size: 13px; color: #8b949e;
     padding: 8px; border-bottom: 1px solid #30363d; font-weight: 500;
   }}
   td {{ padding: 8px; border-bottom: 1px solid #21262d; color: #c9d1d9; }}
-  tr:hover td {{ background: #1c2128; }}
   td:nth-child(2) {{ font-weight: 600; color: #f0f6fc; }}
-
-  .footer {{
+  .a-footer {{
     text-align: center; color: #484f58; font-size: 13px;
-    margin-top: 32px; padding-top: 16px; border-top: 1px solid #21262d;
+    margin-top: 48px; padding-top: 16px; border-top: 1px solid #21262d;
   }}
-  .footer a {{ color: #58a6ff; text-decoration: none; }}
+
+  @media (max-width: 640px) {{
+    .big-number {{ font-size: 56px; }}
+    .rec .rec-savings {{ font-size: 36px; }}
+    .stat-block .stat-big {{ font-size: 48px; }}
+    .comp-row {{ grid-template-columns: 100px 1fr 64px; }}
+    .action-item {{ flex-wrap: wrap; }}
+    .action-sav {{ width: 100%; text-align: left; padding-left: 52px; }}
+  }}
 </style>
 </head>
 <body>
-<div class="container">
-  <h1>Claude Code Usage Advisor</h1>
-  <div class="subtitle">{start_str} &ndash; {end_str} &middot; {p['days']} days &middot; {o['session_count']} sessions</div>
 
-  <div class="stat-grid">
-    <div class="stat-card">
-      <div class="stat-value">${o['total_spend']:.2f}</div>
-      <div class="stat-label">Total Spend</div>
-    </div>
-    <div class="stat-card">
-      <div class="stat-value">${o['daily_avg']:.2f}</div>
-      <div class="stat-label">Daily Average</div>
-    </div>
-    <div class="stat-card">
-      <div class="stat-value">${o['per_session_avg']:.2f}</div>
-      <div class="stat-label">Per Session Avg</div>
-    </div>
-    <div class="stat-card">
-      <div class="stat-value">{r['top_driver']}</div>
-      <div class="stat-label">Top Cost Driver</div>
-    </div>
-  </div>
+{slides_html}
 
-  {savings_banner}
+<nav class="slide-nav">
+  <button class="nav-btn" id="prev" disabled>&larr;</button>
+  <div class="dots">{dots_html}</div>
+  <span class="slide-counter" id="counter">1 / {len(slides)}</span>
+  <button class="nav-btn" id="next">&rarr;</button>
+</nav>
 
-  {"<h2>Recommendations</h2>" if r['recommendations'] else ""}
-  {rec_cards}
+<div class="appendix" id="appendix">
+  <h2>Full Report</h2>
 
-  <div class="card">
-    <h2>Spend by Category</h2>
+  <div class="a-card">
+    <h3>Spend by Category</h3>
     {cat_bars}
   </div>
-
-  <div class="card">
-    <h2>Spend by Model</h2>
+  <div class="a-card">
+    <h3>Spend by Model</h3>
     {model_bars}
   </div>
+  <div class="a-card">
+    <h3>Cache Health</h3>
+    <div class="a-stat-row">
+      <div class="a-stat"><div class="val">{c['hit_rate']:.1f}%</div><div class="lbl">Efficiency</div></div>
+      <div class="a-stat"><div class="val">{c['current_ttl']}</div><div class="lbl">TTL</div></div>
+      <div class="a-stat"><div class="val">{c['total_rebuilds']}</div><div class="lbl">Rebuilds</div></div>
+      <div class="a-stat"><div class="val">{c['gaps_5_60']}</div><div class="lbl">Gaps 5-60m</div></div>
+      <div class="a-stat"><div class="val">{c['gaps_over_1h']}</div><div class="lbl">Gaps &gt;1h</div></div>
+    </div>
+    {ttl_note}
+  </div>
 
-  {cache_section}
-
-  <div class="card">
-    <h2>Top Sessions</h2>
+  <h2>Top Sessions</h2>
+  <div class="a-card">
     <table>
-      <tr><th>#</th><th>Cost</th><th>Date</th><th>Turns</th><th>Duration</th><th>Model</th><th>Max Ctx</th></tr>
+      <tr><th>#</th><th>Cost</th><th>Date</th><th>Turns</th><th>Duration</th><th>Model</th><th>Ctx</th></tr>
       {session_rows}
     </table>
   </div>
 
-  {"<div class='card'><h2>Key Insight</h2><p style=\"color:#c9d1d9\">" + r.get("cost_insight","") + "</p></div>" if r.get("cost_insight") else ""}
+  {insight}
 
-  <div class="footer">
+  <div class="a-footer">
     Generated by Claude Code Usage Advisor &middot; {datetime.now().strftime("%Y-%m-%d %H:%M")}
   </div>
 </div>
+
+<script>
+(function() {{
+  const slides = document.querySelectorAll('.slide');
+  const dots = document.querySelectorAll('.dot');
+  const counter = document.getElementById('counter');
+  const prev = document.getElementById('prev');
+  const next = document.getElementById('next');
+  let cur = 0;
+  const total = slides.length;
+
+  function go(i) {{
+    if (i < 0 || i >= total) return;
+    slides[cur].classList.remove('active');
+    dots[cur].classList.remove('active');
+    cur = i;
+    slides[cur].classList.add('active');
+    dots[cur].classList.add('active');
+    prev.disabled = cur === 0;
+    next.disabled = cur === total - 1;
+    counter.textContent = (cur + 1) + ' / ' + total;
+    window.scrollTo(0, 0);
+  }}
+
+  prev.addEventListener('click', function() {{ go(cur - 1); }});
+  next.addEventListener('click', function() {{ go(cur + 1); }});
+  dots.forEach(function(d) {{
+    d.addEventListener('click', function() {{ go(+d.dataset.idx); }});
+  }});
+
+  document.addEventListener('keydown', function(e) {{
+    if (e.key === 'ArrowRight' || e.key === ' ') {{ e.preventDefault(); go(cur + 1); }}
+    if (e.key === 'ArrowLeft') {{ e.preventDefault(); go(cur - 1); }}
+  }});
+
+  var startX = 0;
+  document.addEventListener('touchstart', function(e) {{ startX = e.touches[0].clientX; }});
+  document.addEventListener('touchend', function(e) {{
+    var dx = e.changedTouches[0].clientX - startX;
+    if (Math.abs(dx) > 50) go(dx < 0 ? cur + 1 : cur - 1);
+  }});
+}})();
+
+function copyCmd(btn) {{
+  var code = btn.parentElement.querySelector('code');
+  var text = code.textContent || code.innerText;
+  navigator.clipboard.writeText(text).then(function() {{
+    btn.textContent = 'Copied!';
+    setTimeout(function() {{ btn.textContent = 'Copy'; }}, 2000);
+  }});
+}}
+</script>
 </body>
 </html>"""
 
