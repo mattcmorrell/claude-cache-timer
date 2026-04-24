@@ -563,18 +563,21 @@ def compute_team_insights(sessions, costs_list):
         for i, tc in enumerate(tcs):
             total_turns += 1
             if tc["is_rebuild"] and i > 0:
-                rebuild_turns += 1
-                rebuild_cost += tc["actual"]
                 t1 = tc["timestamp"]
                 t0 = tcs[i - 1]["timestamp"]
-                if t1 and t0:
-                    gap_s = (t1 - t0).total_seconds()
+                gap_s = (t1 - t0).total_seconds() if t1 and t0 else 0
+                if gap_s > 300:
+                    rebuild_turns += 1
+                    rebuild_cost += tc["actual"]
                     gap_rebuilds.append({
                         "gap_s": gap_s,
                         "cost": tc["actual"],
                         "session_id": s["session_id"],
                         "timestamp": t1,
                     })
+                else:
+                    normal_turns += 1
+                    normal_cost += tc["actual"]
             else:
                 normal_turns += 1
                 normal_cost += tc["actual"]
@@ -1252,18 +1255,26 @@ def compute_deep_dive_data(sessions, costs_list):
         })
     miss_sessions = []
     for s, c in zip(sessions, costs_list):
-        if c["mid_session_rebuilds"] == 0:
-            continue
         tcs = c["turn_costs"]
-        mc = sum(tc["actual"] for i, tc in enumerate(tcs) if tc["is_rebuild"] and i > 0)
-        miss_sessions.append({
-            "id": s["session_id"][:16],
-            "date": s["first_ts"].strftime("%b %d") if s["first_ts"] else "?",
-            "total_cost": round(c["actual"], 2),
-            "miss_count": c["mid_session_rebuilds"],
-            "miss_cost": round(mc, 2),
-            "turns": int(c["turns"]),
-        })
+        idle_rebuilds = 0
+        idle_rebuild_cost = 0.0
+        for i, tc in enumerate(tcs):
+            if tc["is_rebuild"] and i > 0:
+                t1 = tc["timestamp"]
+                t0 = tcs[i - 1]["timestamp"]
+                gap_s = (t1 - t0).total_seconds() if t1 and t0 else 0
+                if gap_s > 300:
+                    idle_rebuilds += 1
+                    idle_rebuild_cost += tc["actual"]
+        if idle_rebuilds > 0:
+            miss_sessions.append({
+                "id": s["session_id"][:16],
+                "date": s["first_ts"].strftime("%b %d") if s["first_ts"] else "?",
+                "total_cost": round(c["actual"], 2),
+                "miss_count": idle_rebuilds,
+                "miss_cost": round(idle_rebuild_cost, 2),
+                "turns": int(c["turns"]),
+            })
     miss_sessions.sort(key=lambda x: x["miss_cost"], reverse=True)
     miss_sessions = miss_sessions[:10]
     ranked = sorted(zip(sessions, costs_list), key=lambda sc: sc[1]["actual"], reverse=True)
@@ -1323,15 +1334,17 @@ def _build_range_content(team, report, deep_data):
     else:
         miss_pct_turns = t["rebuild_pct_turns"]
         miss_pct_cost = t["rebuild_pct_cost"]
+        fmt_t = "&lt;1" if 0 < miss_pct_turns < 0.5 else f"{miss_pct_turns:.0f}"
+        fmt_c = "&lt;1" if 0 < miss_pct_cost < 0.5 else f"{miss_pct_cost:.0f}"
         miss_card = f"""
         <div class="hero-pair">
           <div class="hero-item">
-            <div class="hero-num">{miss_pct_turns:.0f}%</div>
+            <div class="hero-num">{fmt_t}%</div>
             <div class="hero-desc">of your turns</div>
           </div>
           <div class="hero-arrow">&rarr;</div>
           <div class="hero-item">
-            <div class="hero-num accent-red">{miss_pct_cost:.0f}%</div>
+            <div class="hero-num accent-red">{fmt_c}%</div>
             <div class="hero-desc">of your spend</div>
           </div>
         </div>
@@ -1339,12 +1352,12 @@ def _build_range_content(team, report, deep_data):
           <div class="bar-row">
             <span class="bar-label">Turns</span>
             <div class="bar-track"><div class="bar-fill neutral" style="width:{max(2, miss_pct_turns):.1f}%"></div></div>
-            <span class="bar-pct">{miss_pct_turns:.0f}%</span>
+            <span class="bar-pct">{fmt_t}%</span>
           </div>
           <div class="bar-row">
             <span class="bar-label">Cost</span>
             <div class="bar-track"><div class="bar-fill hot" style="width:{max(2, miss_pct_cost):.1f}%"></div></div>
-            <span class="bar-pct">{miss_pct_cost:.0f}%</span>
+            <span class="bar-pct">{fmt_c}%</span>
           </div>
         </div>
         <div class="miss-stats">
@@ -1964,7 +1977,7 @@ function renderCostCurves(el, curves) {
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Claude Usage Report</title>
+<title>Token Traction Report</title>
 <style>
   *, *::before, *::after {{ box-sizing: border-box; }}
   body {{
@@ -2213,7 +2226,7 @@ function renderCostCurves(el, curves) {
 </head>
 <body>
 <div class="container">
-  <h1 class="top-title">Your Claude Usage Report</h1>
+  <h1 class="top-title">Token Traction Report</h1>
 
   <nav class="range-tabs">
 {tabs_html}  </nav>
