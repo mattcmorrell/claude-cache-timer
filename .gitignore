@@ -1,1 +1,10 @@
 .DS_Store
+screenshots/
+.playwright-mcp/
+
+# Personal analysis output (generated per-user, not for sharing)
+session_data.csv
+session_curves.json
+advisor_report.html
+cache_visual.html
+cost_curves.html
