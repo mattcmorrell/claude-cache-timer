@@ -569,7 +569,12 @@ def compute_team_insights(sessions, costs_list):
                 t0 = tcs[i - 1]["timestamp"]
                 if t1 and t0:
                     gap_s = (t1 - t0).total_seconds()
-                    gap_rebuilds.append({"gap_s": gap_s, "cost": tc["actual"]})
+                    gap_rebuilds.append({
+                        "gap_s": gap_s,
+                        "cost": tc["actual"],
+                        "session_id": s["session_id"],
+                        "timestamp": t1,
+                    })
             else:
                 normal_turns += 1
                 normal_cost += tc["actual"]
@@ -1275,7 +1280,27 @@ def compute_deep_dive_data(sessions, costs_list):
             "turns": int(c["turns"]),
             "cumulative": cum,
         })
-    return {"daily": daily_list, "miss_sessions": miss_sessions, "cost_curves": cost_curves}
+    idle_gaps = []
+    for s, c in zip(sessions, costs_list):
+        tcs = c["turn_costs"]
+        for i, tc in enumerate(tcs):
+            if tc["is_rebuild"] and i > 0:
+                t1 = tc["timestamp"]
+                t0 = tcs[i - 1]["timestamp"]
+                if t1 and t0:
+                    gap_s = (t1 - t0).total_seconds()
+                    if gap_s > 300:
+                        idle_gaps.append({
+                            "date": t1.strftime("%b %d") if t1 else "?",
+                            "time": t1.strftime("%H:%M") if t1 else "?",
+                            "gap_min": round(gap_s / 60, 1),
+                            "bucket": "5-60m" if gap_s <= 3600 else ">1h",
+                            "cost": round(tc["actual"], 2),
+                            "tokens": tc["write_tokens"],
+                        })
+    idle_gaps.sort(key=lambda x: x["cost"], reverse=True)
+
+    return {"daily": daily_list, "miss_sessions": miss_sessions, "cost_curves": cost_curves, "idle_gaps": idle_gaps}
 
 
 def _build_range_content(team, report, deep_data):
@@ -1388,7 +1413,8 @@ def _build_range_content(team, report, deep_data):
             </div>"""
 
         gap_card = f"""{gap_hero}
-        <div class="gap-buckets">{gap_buckets}</div>"""
+        <div class="gap-buckets">{gap_buckets}</div>
+      <a class="drill-link" href="#" data-chart="idle-gaps" data-label-closed="See when gaps happened &#8594;" data-label-open="Hide gap details">See when gaps happened &#8594;</a>"""
 
     # ── Session size card ────────────────────────────────────────────────
     buckets = [
@@ -1528,6 +1554,7 @@ def _build_range_content(team, report, deep_data):
       <div class="card-label">Idle Gap Penalty</div>
       {gap_card}
     </div>
+    <div class="chart-drawer" data-chart="idle-gaps"></div>
 
     <div class="card size">
       <div class="card-label">Session Size Impact</div>
@@ -1660,6 +1687,35 @@ def generate_team_html(preset_data, default_range="30d"):
   .miss-count { color: #8b949e; }
   .miss-cost { color: #f85149; font-weight: 600; }
 
+  .idle-gaps-table {
+    width: 100%; border-collapse: collapse;
+    font-size: 14px;
+  }
+  .idle-gaps-table th {
+    text-align: left; font-size: 11px; font-weight: 600;
+    text-transform: uppercase; letter-spacing: 1px;
+    color: #656d76; padding: 8px 12px;
+    border-bottom: 1px solid #30363d;
+  }
+  .idle-gaps-table td {
+    padding: 10px 12px; border-bottom: 1px solid #21262d;
+    color: #c9d1d9;
+  }
+  .idle-gaps-table tr:last-child td { border-bottom: none; }
+  .gap-time { font-family: 'SF Mono', SFMono-Regular, monospace; color: #8b949e; }
+  .gap-dur { font-weight: 600; }
+  .gap-tag {
+    display: inline-block; padding: 2px 8px;
+    border-radius: 12px; font-size: 12px; font-weight: 600;
+  }
+  .gap-tag-5m { background: rgba(210, 153, 34, 0.15); color: #d29922; }
+  .gap-tag-1h { background: rgba(248, 81, 73, 0.15); color: #f85149; }
+  .gap-rebuild-cost { font-weight: 600; color: #f85149; white-space: nowrap; }
+  .gap-tokens { font-family: 'SF Mono', SFMono-Regular, monospace; font-size: 13px; color: #8b949e; white-space: nowrap; }
+  .gap-bar-cell { width: 30%; min-width: 80px; }
+  .gap-bar-track { height: 8px; background: #21262d; border-radius: 4px; overflow: hidden; }
+  .gap-bar-fill { height: 100%; background: #f85149; border-radius: 4px; min-width: 4px; }
+
   .curves-title {
     font-size: 14px; font-weight: 600; color: #c9d1d9;
     margin-bottom: 12px;
@@ -1719,6 +1775,7 @@ function initChart(drawer, chartId, panel) {
   requestAnimationFrame(function() {
     if (chartId === 'daily') renderDailySpend(drawer, data.daily);
     else if (chartId === 'miss-sessions') renderMissSessions(drawer, data.miss_sessions);
+    else if (chartId === 'idle-gaps') renderIdleGaps(drawer, data.idle_gaps);
     else if (chartId === 'cost-curves') renderCostCurves(drawer, data.cost_curves);
   });
 }
@@ -1762,6 +1819,29 @@ function renderMissSessions(el, sessions) {
       '<span class="miss-cost">$' + s.miss_cost.toFixed(2) + ' from misses</span></div></div>';
   });
   h += '</div>';
+  el.innerHTML = h;
+}
+
+function renderIdleGaps(el, gaps) {
+  if (!gaps || !gaps.length) { el.innerHTML = '<div class="no-data">No idle gaps detected.</div>'; return; }
+  var maxCost = Math.max.apply(null, gaps.map(function(g) { return g.cost; }));
+  function fmtTok(n) { return n >= 1000000 ? (n/1000000).toFixed(1)+'M' : n >= 1000 ? Math.round(n/1000)+'K' : n; }
+  var h = '<div class="daily-chart-title">IDLE GAPS THAT TRIGGERED CACHE REBUILDS</div>';
+  h += '<table class="idle-gaps-table"><thead><tr><th>Date</th><th>Time</th><th>Idle</th><th>Type</th><th>Rebuild Cost</th><th>Tokens</th><th></th></tr></thead><tbody>';
+  gaps.forEach(function(g) {
+    var dur = g.gap_min >= 60 ? (g.gap_min / 60).toFixed(1) + 'h' : Math.round(g.gap_min) + 'm';
+    var cls = g.bucket === '>1h' ? 'gap-tag-1h' : 'gap-tag-5m';
+    var label = g.bucket === '>1h' ? '>1 hour' : '5–60 min';
+    var pct = maxCost > 0 ? (g.cost / maxCost * 100) : 0;
+    var barColor = g.bucket === '>1h' ? '#f85149' : '#d29922';
+    h += '<tr><td>' + g.date + '</td><td class="gap-time">' + g.time + '</td>' +
+      '<td class="gap-dur">' + dur + '</td>' +
+      '<td><span class="gap-tag ' + cls + '">' + label + '</span></td>' +
+      '<td class="gap-rebuild-cost" style="color:' + barColor + '">$' + g.cost.toFixed(2) + '</td>' +
+      '<td class="gap-tokens">' + fmtTok(g.tokens) + '</td>' +
+      '<td class="gap-bar-cell"><div class="gap-bar-track"><div class="gap-bar-fill" style="width:' + pct.toFixed(1) + '%;background:' + barColor + '"></div></div></td></tr>';
+  });
+  h += '</tbody></table>';
   el.innerHTML = h;
 }
 
@@ -1894,7 +1974,7 @@ function renderCostCurves(el, curves) {
     font-size: 15px; line-height: 1.6;
   }}
   .container {{
-    max-width: 700px; margin: 0 auto;
+    max-width: 820px; margin: 0 auto;
     padding: 48px 24px 80px;
   }}
   .top-title {{
