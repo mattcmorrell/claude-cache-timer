@@ -24,9 +24,24 @@ from datetime import datetime, timezone
 from collections import defaultdict
 
 # ── Pricing ($/MTok, April 2026) ────────────────────────────────────────────
+# Relative cost: Opus 4.7 ~2x Sonnet, Opus 4.6 ~1.67x Sonnet
 
 PRICING = {
-    "opus": {
+    "opus-4-7": {
+        "base_input": 6.00,
+        "cache_write_5m": 7.50,
+        "cache_write_1h": 12.00,
+        "cache_read": 0.60,
+        "output": 30.00,
+    },
+    "opus-4-6": {
+        "base_input": 5.00,
+        "cache_write_5m": 6.25,
+        "cache_write_1h": 10.00,
+        "cache_read": 0.50,
+        "output": 25.00,
+    },
+    "opus-4-5": {
         "base_input": 5.00,
         "cache_write_5m": 6.25,
         "cache_write_1h": 10.00,
@@ -49,23 +64,50 @@ PRICING = {
     },
 }
 
-MODEL_KEYWORDS = {
-    "opus": ["opus"],
-    "sonnet": ["sonnet"],
-    "haiku": ["haiku"],
-}
-
 DEFAULT_TIER = "sonnet"
 
 
 def model_tier(model_str):
+    """Return pricing tier key. Distinguishes Opus versions."""
     if not model_str:
         return DEFAULT_TIER
     m = model_str.lower()
-    for tier, keywords in MODEL_KEYWORDS.items():
-        if any(k in m for k in keywords):
-            return tier
+    if "opus-4-7" in m or "opus-4.7" in m:
+        return "opus-4-7"
+    if "opus-4-6" in m or "opus-4.6" in m:
+        return "opus-4-6"
+    if "opus-4-5" in m or "opus-4.5" in m:
+        return "opus-4-5"
+    if "opus" in m:
+        return "opus-4-6"
+    if "sonnet" in m:
+        return "sonnet"
+    if "haiku" in m:
+        return "haiku"
     return DEFAULT_TIER
+
+
+def tier_family(tier):
+    """Return 'opus', 'sonnet', or 'haiku' for display grouping."""
+    if tier.startswith("opus"):
+        return "opus"
+    return tier
+
+
+def opus_version(model_str):
+    """Return '4.7', '4.6', '4.5', or None."""
+    if not model_str:
+        return None
+    m = model_str.lower()
+    if "opus-4-7" in m or "opus-4.7" in m:
+        return "4.7"
+    if "opus-4-6" in m or "opus-4.6" in m:
+        return "4.6"
+    if "opus-4-5" in m or "opus-4.5" in m:
+        return "4.5"
+    if "opus" in m:
+        return "4.6"
+    return None
 
 
 def rates_for(model_str):
@@ -202,21 +244,37 @@ def compute_session_costs(session):
         totals["cache_write_5m_tokens"] += t["cache_write_5m"]
         totals["cache_write_1h_tokens"] += t["cache_write_1h"]
 
-        by_tier[tier]["cost"] += actual
-        by_tier[tier]["output_cost"] += out_c
-        by_tier[tier]["turns"] += 1
+        family = tier_family(tier)
+        by_tier[family]["cost"] = by_tier[family].get("cost", 0) + actual
+        by_tier[family]["output_cost"] = by_tier[family].get("output_cost", 0) + out_c
+        by_tier[family]["turns"] = by_tier[family].get("turns", 0) + 1
 
-        # If we priced this turn at sonnet instead of opus
-        if tier == "opus":
-            sr = PRICING["sonnet"]
-            sonnet_cost = (
-                (t["output_tokens"] / mtok) * sr["output"]
-                + (t["cache_read_tokens"] / mtok) * sr["cache_read"]
-                + (t["cache_write_5m"] / mtok) * sr["cache_write_5m"]
-                + (t["cache_write_1h"] / mtok) * sr["cache_write_1h"]
-                + (t["input_tokens"] / mtok) * sr["base_input"]
+        # Track Opus version and context excess for 4.7 → 4.6 recommendation
+        ov = opus_version(t["model"])
+        if ov == "4.7":
+            by_tier["opus"]["turns_4_7"] = by_tier["opus"].get("turns_4_7", 0) + 1
+            context = t["cache_read_tokens"] + t["cache_write_tokens"] + t["input_tokens"]
+            by_tier["opus"]["peak_context"] = max(by_tier["opus"].get("peak_context", 0), context)
+
+            # Per-token savings: what this turn would cost on 4.6 pricing
+            r46 = PRICING["opus-4-6"]
+            cost_4_7 = actual
+            cost_4_6 = (
+                (t["output_tokens"] / mtok) * r46["output"]
+                + (t["cache_read_tokens"] / mtok) * r46["cache_read"]
+                + (t["cache_write_5m"] / mtok) * r46["cache_write_5m"]
+                + (t["cache_write_1h"] / mtok) * r46["cache_write_1h"]
+                + (t["input_tokens"] / mtok) * r46["base_input"]
             )
-            by_tier["opus"]["sonnet_counterfactual"] = by_tier["opus"].get("sonnet_counterfactual", 0) + sonnet_cost
+            by_tier["opus"]["price_diff_4_7"] = by_tier["opus"].get("price_diff_4_7", 0) + (cost_4_7 - cost_4_6)
+
+            if context > 200_000:
+                excess = context - 200_000
+                excess_read_cost = (excess / mtok) * r["cache_read"]
+                by_tier["opus"]["excess_4_7_cost"] = by_tier["opus"].get("excess_4_7_cost", 0) + excess_read_cost
+                by_tier["opus"]["turns_over_200k"] = by_tier["opus"].get("turns_over_200k", 0) + 1
+        elif ov:
+            by_tier["opus"]["turns_4_6"] = by_tier["opus"].get("turns_4_6", 0) + 1
 
     # Gap analysis
     gaps_5_60 = 0
@@ -294,17 +352,31 @@ def run_analysis(sessions, costs_list):
     cat_cache_read = sum(c["cache_read_cost"] for c in costs_list)
     cat_uncached = sum(c["uncached_input_cost"] for c in costs_list)
 
-    # Spend by model tier
+    # Spend by model family (opus/sonnet/haiku)
     tier_costs = defaultdict(float)
     tier_output = defaultdict(float)
     tier_turns = defaultdict(int)
-    sonnet_cf_total = 0.0
     for c in costs_list:
         for tier, data in c["by_tier"].items():
             tier_costs[tier] += data.get("cost", 0)
             tier_output[tier] += data.get("output_cost", 0)
             tier_turns[tier] += int(data.get("turns", 0))
-            sonnet_cf_total += data.get("sonnet_counterfactual", 0)
+
+    # Opus 4.7 → 4.6 analysis
+    total_excess_4_7_cost = 0.0
+    total_price_diff_4_7 = 0.0
+    total_turns_4_7 = 0
+    total_turns_4_6_compat = 0
+    total_turns_over_200k = 0
+    peak_context_all = 0
+    for c in costs_list:
+        od = c["by_tier"].get("opus", {})
+        total_excess_4_7_cost += od.get("excess_4_7_cost", 0)
+        total_price_diff_4_7 += od.get("price_diff_4_7", 0)
+        total_turns_4_7 += int(od.get("turns_4_7", 0))
+        total_turns_4_6_compat += int(od.get("turns_4_6", 0))
+        total_turns_over_200k += int(od.get("turns_over_200k", 0))
+        peak_context_all = max(peak_context_all, od.get("peak_context", 0))
 
     # Cache analysis
     total_rebuilds = sum(c["rebuilds"] for c in costs_list)
@@ -341,25 +413,6 @@ def run_analysis(sessions, costs_list):
             "model": primary_model,
             "max_context": c["max_context_tokens"],
         })
-
-    # Short Opus sessions (candidates for Sonnet)
-    short_opus = []
-    short_opus_cost = 0.0
-    short_opus_sonnet_cost = 0.0
-    for s, c in zip(sessions, costs_list):
-        opus_data = c["by_tier"].get("opus", {})
-        if opus_data.get("turns", 0) == 0:
-            continue
-        is_primarily_opus = opus_data.get("cost", 0) > c["actual"] * 0.5
-        is_short = c["turns"] < 25 and s["duration_min"] < 30
-        if is_primarily_opus and is_short:
-            short_opus.append(s["session_id"])
-            short_opus_cost += opus_data.get("cost", 0)
-            short_opus_sonnet_cost += opus_data.get("sonnet_counterfactual", 0)
-
-    sonnet_switch_savings = short_opus_cost - short_opus_sonnet_cost
-    all_opus_cost = tier_costs.get("opus", 0)
-    all_opus_sonnet_cf = sonnet_cf_total
 
     # Context size analysis
     max_contexts = [c["max_context_tokens"] for c in costs_list]
@@ -409,69 +462,45 @@ def run_analysis(sessions, costs_list):
                 ),
             })
 
-    # Rec 2/3: Model tier — show EITHER "default to Sonnet" (bigger opportunity)
-    # or "Sonnet for quick tasks" (conservative), not both.
-    full_savings = all_opus_cost - all_opus_sonnet_cf if all_opus_sonnet_cf > 0 else 0
-    opus_pct = all_opus_cost / total_spend * 100 if total_spend > 0 else 0
+    # Rec 2: Opus 4.7 → 4.6 (same family, ~17% cheaper per token, 200K context cap)
+    total_4_7_savings = total_price_diff_4_7 + total_excess_4_7_cost
+    if total_turns_4_7 > 0 and total_4_7_savings > 5:
+        monthly_4_6 = (total_4_7_savings / days) * 30
+        peak_str = fmt_tokens(peak_context_all) if peak_context_all else "?"
+        pct_cheaper = (total_price_diff_4_7 / max(0.01, total_price_diff_4_7 + sum(
+            c["by_tier"].get("opus", {}).get("cost", 0) for c in costs_list
+            if c["by_tier"].get("opus", {}).get("turns_4_7", 0) > 0
+        ))) * 100 if total_price_diff_4_7 > 0 else 0
 
-    if all_opus_cost > 50 and full_savings > 20:
-        monthly_full = (full_savings / days) * 30
-        recommendations.append({
-            "id": "model_sonnet_default",
-            "title": "Make Sonnet your default model",
-            "savings_monthly": monthly_full,
-            "detail": (
-                f"Opus is {opus_pct:.0f}% of your spend (${all_opus_cost:.2f}). "
-                f"At Sonnet rates the same volume would be ${all_opus_sonnet_cf:.2f} "
-                f"— a ${full_savings:.2f} difference over {days} days. "
-                f"Sonnet 4.6 handles most coding tasks well. Use Opus only when you "
-                f"need it: complex architecture, subtle multi-file refactors, or "
-                f"tricky debugging. Start conservative — switch your quick sessions "
-                f"first ({len(short_opus)} of yours were under 25 turns), then expand."
-            ),
-            "setting": (
-                'Set default model globally:\n'
-                '  claude config set model sonnet\n'
-                'Upgrade for complex work:\n'
-                '  /model opus  (within a session)\n'
-                '  claude --model opus  (at start)'
-            ),
-        })
-    elif len(short_opus) >= 3 and sonnet_switch_savings > 2:
-        monthly_model = (sonnet_switch_savings / days) * 30
-        recommendations.append({
-            "id": "model_sonnet_short",
-            "title": "Use Sonnet for quick tasks",
-            "savings_monthly": monthly_model,
-            "detail": (
-                f"{len(short_opus)} of your sessions were short (<25 turns, <30 min) "
-                f"but ran on Opus. If these were routine tasks (quick questions, small "
-                f"edits, lookups), Sonnet handles them well at 40% lower cost — "
-                f"saving ${sonnet_switch_savings:.2f} over this period."
-            ),
-            "setting": (
-                'For quick tasks, start with:\n'
-                '  claude --model sonnet\n'
-                'Or set a per-project default in .claude/settings.json:\n'
-                '  "model": "sonnet"'
-            ),
-        })
+        detail_parts = [
+            f"You have {total_turns_4_7} turns on Opus 4.7. "
+            f"Opus 4.6 is the same model family at ~1.67x Sonnet cost "
+            f"vs 4.7's ~2x — about 17% cheaper per token."
+        ]
+        if total_price_diff_4_7 > 0:
+            detail_parts.append(
+                f"Per-token savings alone: ${total_price_diff_4_7:.2f} over {days} days."
+            )
+        if total_turns_over_200k > 0:
+            detail_parts.append(
+                f"Plus {total_turns_over_200k} turns exceeded 200K context "
+                f"(peak: {peak_str}) — 4.6's smaller window forces earlier "
+                f"compaction, saving an additional ${total_excess_4_7_cost:.2f}."
+            )
+        detail_parts.append(
+            f"Total estimated savings: ${total_4_7_savings:.2f} over {days} days."
+        )
 
-    # Rec 4: Session bloat warning
-    if sessions_over_500k >= 3:
         recommendations.append({
-            "id": "context_bloat",
-            "title": "Enable auto-compact for large sessions",
-            "savings_monthly": None,
-            "detail": (
-                f"{sessions_over_500k} sessions exceeded 500K context tokens. "
-                f"Large contexts mean every turn processes more tokens, driving up "
-                f"costs. Auto-compacting earlier keeps per-turn costs lower."
-            ),
+            "id": "opus_4_6",
+            "title": "Switch from Opus 4.7 to 4.6",
+            "savings_monthly": monthly_4_6,
+            "detail": " ".join(detail_parts),
             "setting": (
-                'Claude Code auto-compacts when context is nearly full.\n'
-                'For earlier compaction, use /compact proactively when\n'
-                'context feels large, or start a new session for new topics.'
+                'Set your model version:\n'
+                '  claude --model claude-opus-4-6\n'
+                'Or in settings.json:\n'
+                '  "model": "claude-opus-4-6"'
             ),
         })
 
@@ -493,10 +522,10 @@ def run_analysis(sessions, costs_list):
     if top_driver == "Cache reads":
         cost_insight = (
             f"Cache reads are your top cost ({categories[0][1]/total_spend*100:.0f}%) — "
-            f"not because they're expensive per token (they're the cheapest at $0.50/MTok "
-            f"on Opus) but because your sessions accumulate large contexts. Every turn "
-            f"re-reads the full context. The biggest levers: use a cheaper model (Sonnet "
-            f"reads at $0.30/MTok) or compact earlier to keep contexts smaller."
+            f"not because they're expensive per token (they're the cheapest input type) "
+            f"but because your sessions accumulate large contexts. Every turn "
+            f"re-reads the full context. The biggest lever is keeping contexts smaller "
+            f"through earlier compaction — Opus 4.6's 200K window does this automatically."
         )
     elif top_driver == "Cache writes":
         cost_insight = (
@@ -508,9 +537,9 @@ def run_analysis(sessions, costs_list):
     elif top_driver == "Output tokens":
         cost_insight = (
             f"Output tokens are your top cost ({categories[0][1]/total_spend*100:.0f}%). "
-            f"This is the most expensive token type ($25/MTok on Opus, $15 on Sonnet). "
-            f"Model selection is your biggest lever — switching output-heavy sessions to "
-            f"Sonnet saves 40% on your dominant cost."
+            f"This is the most expensive token type ($25-30/MTok on Opus). The biggest lever "
+            f"is context size — smaller contexts mean fewer tokens processed per turn, "
+            f"leaving more budget for output."
         )
     else:
         cost_insight = ""
@@ -556,16 +585,25 @@ def run_analysis(sessions, costs_list):
         },
         "sessions": {
             "top": top_sessions,
-            "short_opus_count": len(short_opus),
             "sessions_over_200k": sessions_over_200k,
             "sessions_over_500k": sessions_over_500k,
             "avg_max_context": avg_max_context,
+        },
+        "opus_versions": {
+            "turns_4_7": total_turns_4_7,
+            "turns_4_6": total_turns_4_6_compat,
+            "turns_over_200k": total_turns_over_200k,
+            "peak_context": peak_context_all,
+            "excess_cost": total_excess_4_7_cost,
+            "price_diff": total_price_diff_4_7,
+            "total_savings": total_4_7_savings,
         },
         "top_driver": top_driver,
         "cost_insight": cost_insight,
         "categories_ranked": categories,
         "recommendations": recommendations,
         "total_potential_savings": total_potential,
+        "_raw_costs": costs_list,
     }
 
 
@@ -706,27 +744,28 @@ def print_text_report(report):
 def _rec_visual(rec, report):
     """Build a simple visual element for a recommendation slide."""
     rid = rec["id"]
-    if rid in ("model_sonnet_default", "model_sonnet_short"):
-        opus_cost = report["spend_by_model"].get("opus", {}).get("cost", 0)
-        days = report["period"]["days"]
-        sav_total = (rec["savings_monthly"] or 0) / 30 * days
-        proposed = opus_cost - sav_total
-        if opus_cost <= 0:
-            return ""
-        pct_proposed = proposed / opus_cost * 100
+    if rid == "opus_4_6":
+        ov = report.get("opus_versions", {})
+        price_diff = ov.get("price_diff", 0)
+        excess = ov.get("excess_cost", 0)
+        turns_4_7 = ov.get("turns_4_7", 0)
+        turns_over = ov.get("turns_over_200k", 0)
+        peak = ov.get("peak_context", 0)
+        peak_k = peak // 1000 if peak else 0
+
         return f"""
         <div class="visual comparison">
           <div class="comp-row">
-            <div class="comp-label">Current (Opus)</div>
+            <div class="comp-label">Opus 4.7 (~2x)</div>
             <div class="comp-track"><div class="comp-fill" style="width:100%;background:#bc8cff"></div></div>
-            <div class="comp-value">${opus_cost:.0f}</div>
+            <div class="comp-value">$30/MTok</div>
           </div>
           <div class="comp-row">
-            <div class="comp-label">With Sonnet</div>
-            <div class="comp-track"><div class="comp-fill" style="width:{pct_proposed:.0f}%;background:#79c0ff"></div></div>
-            <div class="comp-value">${proposed:.0f}</div>
+            <div class="comp-label">Opus 4.6 (~1.67x)</div>
+            <div class="comp-track"><div class="comp-fill" style="width:83%;background:#79c0ff"></div></div>
+            <div class="comp-value">$25/MTok</div>
           </div>
-          <div class="comp-diff">-${sav_total:.0f} over {days} days</div>
+          <div class="comp-diff">{turns_4_7} turns &middot; 17% cheaper per token{f" &middot; {turns_over} turns over 200K" if turns_over > 0 else ""}</div>
         </div>"""
     elif rid == "cache_ttl_1h":
         n = report["cache"]["avoidable_misses"]
@@ -769,23 +808,37 @@ def generate_html(report):
     # ── Build slides ─────────────────────────────────────────────────────
     slides = []
 
-    # Slide 0: Cover
+    # Slide 0: Summary — answer the question upfront
     if recs:
         n = len(recs)
-        cover_sub = f'{n} setting{"s" if n != 1 else ""} to tune'
-        cover_sav = f'<div class="cover-savings">~${r["total_potential_savings"]:.0f}/mo potential savings</div>'
+        summary_answer = "Yes."
+        summary_answer_class = "summary-yes"
+        summary_detail = (
+            f'{n} easy setting{"s" if n != 1 else ""} change{"s" if n != 1 else ""} '
+            f'could save ~${r["total_potential_savings"]:.0f}/mo'
+        )
+        summary_sub = "No workflow changes — just parameter tuning."
     else:
-        cover_sub = "Your settings are well-tuned"
-        cover_sav = '<div class="cover-good">No changes needed</div>'
+        summary_answer = "Nope, you're good."
+        summary_answer_class = "summary-no"
+        summary_detail = "Your Claude is configured well for how you work."
+        summary_sub = "No easy wins found — your settings match your usage patterns."
 
     slides.append(f"""
+      <div class="slide-inner summary">
+        <div class="summary-q">Is there anything you can easily change<br>to make your tokens go further?</div>
+        <div class="{summary_answer_class}">{summary_answer}</div>
+        <div class="summary-detail">{summary_detail}</div>
+        <div class="summary-sub">{summary_sub}</div>
+      </div>""")
+
+    # Slide 1: Spend overview
+    slides.append(f"""
       <div class="slide-inner cover">
-        <div class="cover-label">Claude Code Usage Advisor</div>
+        <div class="cover-label">Your Usage</div>
         <div class="big-number">${o['total_spend']:.0f}</div>
         <div class="cover-period">{start_str} &ndash; {end_str}</div>
         <div class="cover-meta">{o['session_count']} sessions &middot; {p['days']} days &middot; ${o['daily_avg']:.0f}/day avg</div>
-        <div class="cover-sub">{cover_sub}</div>
-        {cover_sav}
       </div>""")
 
     # Slides 1-N: Recommendations
@@ -931,8 +984,25 @@ def generate_html(report):
   .cover-period {{ font-size: 18px; color: #8b949e; }}
   .cover-meta {{ font-size: 14px; color: #484f58; margin-bottom: 40px; }}
   .cover-sub {{ font-size: 22px; color: #c9d1d9; margin-bottom: 8px; }}
-  .cover-savings {{ font-size: 28px; font-weight: 700; color: #3fb950; }}
-  .cover-good {{ font-size: 20px; color: #58a6ff; }}
+  /* ── Summary (first slide) ── */
+  .summary-q {{
+    font-size: 22px; color: #8b949e; line-height: 1.5;
+    margin-bottom: 40px;
+  }}
+  .summary-yes {{
+    font-size: 72px; font-weight: 800; color: #3fb950;
+    line-height: 1; margin-bottom: 16px;
+  }}
+  .summary-no {{
+    font-size: 48px; font-weight: 800; color: #58a6ff;
+    line-height: 1; margin-bottom: 16px;
+  }}
+  .summary-detail {{
+    font-size: 22px; color: #e6edf3; margin-bottom: 8px;
+  }}
+  .summary-sub {{
+    font-size: 16px; color: #484f58;
+  }}
 
   /* ── Rec slides ── */
   .rec .rec-savings {{
