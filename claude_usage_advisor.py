@@ -1535,8 +1535,10 @@ def _build_range_content(team, report, deep_data):
       <a class="drill-link" href="#" data-chart="cost-curves" data-label-closed="See cost curves &#8594;" data-label-open="Hide cost curves">See cost curves &#8594;</a>
     </div>
     <div class="chart-drawer" data-chart="cost-curves">
+      <div class="curves-title">Session Cost Growth — Top 15</div>
       <canvas class="curves-canvas" style="width:100%;height:400px"></canvas>
       <div class="curves-legend"></div>
+      <div class="curves-tooltip"></div>
     </div>
 
     <div class="card rec">
@@ -1658,7 +1660,11 @@ def generate_team_html(preset_data, default_range="30d"):
   .miss-count { color: #8b949e; }
   .miss-cost { color: #f85149; font-weight: 600; }
 
-  .curves-canvas { width: 100%; height: 400px; display: block; }
+  .curves-title {
+    font-size: 14px; font-weight: 600; color: #c9d1d9;
+    margin-bottom: 12px;
+  }
+  .curves-canvas { width: 100%; height: 400px; display: block; cursor: crosshair; }
   .curves-legend {
     display: grid; grid-template-columns: repeat(3, 1fr);
     gap: 6px 16px; margin-top: 16px;
@@ -1666,9 +1672,21 @@ def generate_team_html(preset_data, default_range="30d"):
   .curve-legend-item {
     display: flex; align-items: center; gap: 8px;
     font-size: 13px; color: #8b949e;
+    cursor: pointer; padding: 4px 8px;
+    border-radius: 4px; transition: background 0.15s;
   }
+  .curve-legend-item:hover { background: #21262d; }
+  .curve-legend-item.dimmed { opacity: 0.3; }
   .curve-swatch {
     width: 20px; height: 3px; border-radius: 2px; flex-shrink: 0;
+  }
+  .curves-tooltip {
+    display: none; position: fixed;
+    background: #30363d; border: 1px solid #484f58;
+    border-radius: 6px; padding: 10px 14px;
+    font-size: 13px; color: #e6edf3;
+    pointer-events: none; z-index: 100;
+    line-height: 1.6; max-width: 280px;
   }
   .no-data {
     font-size: 14px; color: #656d76;
@@ -1750,8 +1768,10 @@ function renderMissSessions(el, sessions) {
 function renderCostCurves(el, curves) {
   if (!curves.length) { el.innerHTML = '<div class="no-data">No session data.</div>'; return; }
   var colors = ['#58a6ff','#f85149','#3fb950','#d29922','#bc8cff','#79c0ff','#56d364','#e3b341','#ff7b72','#a5d6ff','#7ee787','#d2a8ff','#ffa657','#ff9bce','#7dcfff'];
+  var hidden = {};
   var canvas = el.querySelector('canvas');
   if (!canvas) return;
+  var tooltip = el.querySelector('.curves-tooltip');
   var ctx = canvas.getContext('2d');
   var dpr = window.devicePixelRatio || 1;
   var W = canvas.clientWidth;
@@ -1762,40 +1782,100 @@ function renderCostCurves(el, curves) {
   var pad = {top: 20, right: 20, bottom: 40, left: 60};
   var pW = W - pad.left - pad.right;
   var pH = H - pad.top - pad.bottom;
-  var maxTurns = Math.max.apply(null, curves.map(function(c) { return c.cumulative.length; }));
-  var maxCost = Math.max.apply(null, curves.map(function(c) { return c.total; }));
-  ctx.strokeStyle = '#21262d'; ctx.lineWidth = 1;
-  ctx.fillStyle = '#8b949e'; ctx.font = '12px -apple-system, sans-serif'; ctx.textAlign = 'right';
-  for (var i = 0; i <= 4; i++) {
-    var y = pad.top + (pH / 4) * i;
-    ctx.beginPath(); ctx.moveTo(pad.left, y); ctx.lineTo(W - pad.right, y); ctx.stroke();
-    ctx.fillText('$' + Math.round(maxCost * (1 - i / 4)), pad.left - 8, y + 4);
-  }
-  ctx.textAlign = 'center';
-  for (var i = 0; i <= 4; i++) {
-    var x = pad.left + (pW / 4) * i;
-    ctx.fillText(Math.round(maxTurns * i / 4), x, H - pad.bottom + 20);
-  }
-  ctx.fillText('Turn #', W / 2, H - 4);
-  curves.forEach(function(s, idx) {
-    ctx.strokeStyle = colors[idx % colors.length];
-    ctx.lineWidth = 2; ctx.globalAlpha = 0.85;
-    ctx.beginPath();
-    s.cumulative.forEach(function(val, j) {
-      var x = pad.left + (j / Math.max(1, maxTurns - 1)) * pW;
-      var y = pad.top + pH - (val / maxCost) * pH;
-      if (j === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+
+  function draw() {
+    ctx.clearRect(0, 0, W, H);
+    var visible = curves.filter(function(_, i) { return !hidden[i]; });
+    if (!visible.length) return;
+    var maxTurns = Math.max.apply(null, visible.map(function(c) { return c.cumulative.length; }));
+    var maxCost = Math.max.apply(null, visible.map(function(c) { return c.total; })) * 1.05;
+    ctx.strokeStyle = '#21262d'; ctx.lineWidth = 1;
+    ctx.fillStyle = '#8b949e'; ctx.font = '12px -apple-system, sans-serif'; ctx.textAlign = 'right';
+    for (var i = 0; i <= 4; i++) {
+      var y = pad.top + (pH / 4) * i;
+      ctx.beginPath(); ctx.moveTo(pad.left, y); ctx.lineTo(W - pad.right, y); ctx.stroke();
+      ctx.fillText('$' + Math.round(maxCost * (1 - i / 4)), pad.left - 8, y + 4);
+    }
+    ctx.textAlign = 'center';
+    for (var i = 0; i <= 4; i++) {
+      var x = pad.left + (pW / 4) * i;
+      ctx.fillText(Math.round(maxTurns * i / 4), x, H - pad.bottom + 20);
+    }
+    ctx.fillText('Turn #', W / 2, H - 4);
+    curves.forEach(function(s, idx) {
+      if (hidden[idx]) return;
+      ctx.strokeStyle = colors[idx % colors.length];
+      ctx.lineWidth = 2; ctx.globalAlpha = 0.85;
+      ctx.beginPath();
+      s.cumulative.forEach(function(val, j) {
+        var x = pad.left + (j / Math.max(1, maxTurns - 1)) * pW;
+        var y = pad.top + pH - (val / maxCost) * pH;
+        if (j === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+      });
+      ctx.stroke(); ctx.globalAlpha = 1;
     });
-    ctx.stroke(); ctx.globalAlpha = 1;
-  });
+    el._maxTurns = maxTurns;
+    el._maxCost = maxCost;
+  }
+
+  draw();
+
   var leg = el.querySelector('.curves-legend');
   if (leg) {
     var lh = '';
     curves.forEach(function(s, idx) {
-      lh += '<div class="curve-legend-item"><span class="curve-swatch" style="background:' + colors[idx % colors.length] + '"></span>' + s.date + ' — $' + s.total.toFixed(0) + ' (' + s.turns + ' turns)</div>';
+      lh += '<div class="curve-legend-item" data-idx="' + idx + '"><span class="curve-swatch" style="background:' + colors[idx % colors.length] + '"></span>' + s.date + ' — $' + s.total.toFixed(0) + ' (' + s.turns + ' turns)</div>';
     });
     leg.innerHTML = lh;
+    leg.addEventListener('click', function(e) {
+      var item = e.target.closest('.curve-legend-item');
+      if (!item) return;
+      var idx = parseInt(item.getAttribute('data-idx'));
+      if (hidden[idx]) { delete hidden[idx]; item.classList.remove('dimmed'); }
+      else { hidden[idx] = true; item.classList.add('dimmed'); }
+      draw();
+    });
   }
+
+  canvas.addEventListener('mousemove', function(e) {
+    if (!tooltip) return;
+    var rect = canvas.getBoundingClientRect();
+    var mx = e.clientX - rect.left;
+    var my = e.clientY - rect.top;
+    if (mx < pad.left || mx > W - pad.right || my < pad.top || my > pad.top + pH) {
+      tooltip.style.display = 'none'; return;
+    }
+    var maxTurns = el._maxTurns || 1;
+    var maxCost = el._maxCost || 1;
+    var turnAtMouse = ((mx - pad.left) / pW) * maxTurns;
+    var best = null, bestDist = Infinity;
+    curves.forEach(function(s, idx) {
+      if (hidden[idx]) return;
+      var j = Math.min(Math.round(turnAtMouse), s.cumulative.length - 1);
+      if (j < 0) return;
+      var val = s.cumulative[j];
+      var sy = pad.top + pH - (val / maxCost) * pH;
+      var dist = Math.abs(sy - my);
+      if (dist < bestDist && dist < 40) {
+        bestDist = dist;
+        best = {s: s, idx: idx, turn: j, val: val};
+      }
+    });
+    if (best) {
+      tooltip.innerHTML = '<div style="color:' + colors[best.idx % colors.length] + ';font-weight:600">' + best.s.date + ' — ' + best.s.id + '</div>' +
+        'Turn ' + best.turn + ' of ' + best.s.turns + '<br>' +
+        '$' + best.val.toFixed(2) + ' cumulative<br>' +
+        'Session total: $' + best.s.total.toFixed(2);
+      tooltip.style.display = 'block';
+      tooltip.style.left = (e.clientX + 16) + 'px';
+      tooltip.style.top = (e.clientY - 10) + 'px';
+    } else {
+      tooltip.style.display = 'none';
+    }
+  });
+  canvas.addEventListener('mouseleave', function() {
+    if (tooltip) tooltip.style.display = 'none';
+  });
 }
 """
 
